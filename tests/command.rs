@@ -25,5 +25,6 @@ struct KillOnDrop(Child);
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
         self.0.kill().ok();
+        self.0.try_wait().ok();
     }
 }
