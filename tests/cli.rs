@@ -1,9 +1,12 @@
 #![cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use std::env;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Stdio;
+
+use tokio::fs::File;
+use tokio::io::AsyncRead;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 
 use anyhow::{Context, Result};
 use rand::{RngCore, SeedableRng};
@@ -18,33 +21,33 @@ fn make_rand_file(size: usize, path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn cli_provide_one_file() -> Result<()> {
+#[tokio::test]
+async fn cli_provide_one_file() -> Result<()> {
     let dir = tempdir()?;
     let path = dir.path().join("foo");
     make_rand_file(1000, &path)?;
     // provide a path to a file, do not pipe from stdin, do not pipe to stdout
-    test_provide_get_loop(&path, Input::Path, Output::Path)
+    test_provide_get_loop(&path, Input::Path, Output::Path).await
 }
 
-#[test]
-fn cli_provide_folder() -> Result<()> {
+#[tokio::test]
+async fn cli_provide_folder() -> Result<()> {
     let dir = tempdir()?;
     let foo_path = dir.path().join("foo");
     let bar_path = dir.path().join("bar");
     make_rand_file(1000, &foo_path)?;
     make_rand_file(10000, &bar_path)?;
     // provide a path to a folder, do not pipe from stdin, do not pipe to stdout
-    test_provide_get_loop(dir.path(), Input::Path, Output::Path)
+    test_provide_get_loop(dir.path(), Input::Path, Output::Path).await
 }
 
-#[test]
-fn cli_provide_from_stdin_to_stdout() -> Result<()> {
+#[tokio::test]
+async fn cli_provide_from_stdin_to_stdout() -> Result<()> {
     let dir = tempdir()?;
     let path = dir.path().join("foo");
     make_rand_file(1000, &path)?;
     // provide a file, pipe content to the provider's stdin, pipe content to the getter's stdout
-    test_provide_get_loop(&path, Input::Stdin, Output::Stdout)
+    test_provide_get_loop(&path, Input::Stdin, Output::Stdout).await
 }
 
 /// Parameter for `test_provide_get_loop`, that determines how we handle the fetched data from the
@@ -75,7 +78,7 @@ enum Input {
 /// Runs the provider as a child process that stays alive until the getter has completed. Then
 /// checks the output of the "provide" and "get" processes against expected regex output. Finally,
 /// test the content fetched from the "get" process is the same as the "provided" content.
-fn test_provide_get_loop(path: &Path, input: Input, output: Output) -> Result<()> {
+async fn test_provide_get_loop(path: &Path, input: Input, output: Output) -> Result<()> {
     let out = if output == Output::Stdout {
         None
     } else {
@@ -98,14 +101,15 @@ fn test_provide_get_loop(path: &Path, input: Input, output: Output) -> Result<()
     let iroh = env!("CARGO_BIN_EXE_iroh");
 
     // spawn a provider & optionally provide from stdin
-    let provider = match input {
+    let mut provider = match input {
         Input::Stdin => {
-            let f = File::open(&path)?;
-            let stdin = Stdio::from(f);
+            let f = File::open(&path).await?;
+            let stdin = Stdio::from(f.into_std().await);
             Command::new(iroh)
                 .stderr(Stdio::null())
                 .stdout(Stdio::piped())
                 .stdin(stdin)
+                .kill_on_drop(true)
                 .arg("provide")
                 .arg("--addr")
                 .arg(ADDR)
@@ -115,6 +119,7 @@ fn test_provide_get_loop(path: &Path, input: Input, output: Output) -> Result<()
             .stderr(Stdio::null())
             .stdout(Stdio::piped())
             .stdin(Stdio::null())
+            .kill_on_drop(true)
             .arg("provide")
             .arg(&path)
             .arg("--addr")
@@ -122,13 +127,11 @@ fn test_provide_get_loop(path: &Path, input: Input, output: Output) -> Result<()
             .spawn()?,
     };
 
-    // wrap in `ProvideProcess` to ensure the spawned process is killed on drop
-    let mut provider = ProvideProcess { child: provider };
-    let stdout = provider.child.stdout.take().unwrap();
+    let stdout = provider.stdout.take().unwrap();
     let stdout = BufReader::new(stdout);
 
     // test provide output & get all in one ticket from stderr
-    let all_in_one = match_provide_output(stdout, num_blobs, input)?;
+    let all_in_one = match_provide_output(stdout, num_blobs, input).await?;
 
     let (get_stdout, get_stderr) = {
         // create a `get-ticket` cmd & optionally provide out path
@@ -141,7 +144,7 @@ fn test_provide_get_loop(path: &Path, input: Input, output: Output) -> Result<()
         };
 
         // test get stderr output
-        let get_output = cmd.output()?;
+        let get_output = cmd.output().await?;
         assert!(get_output.status.success());
         (get_output.stdout, get_output.stderr)
     };
@@ -157,20 +160,7 @@ fn test_provide_get_loop(path: &Path, input: Input, output: Output) -> Result<()
     };
 
     assert!(!get_stderr.is_empty());
-    match_get_stderr(get_stderr)
-}
-
-/// Wrapping the [`Child`] process here allows us to impl the `Drop` trait ensuring the provide
-/// process is killed when it goes out of scope.
-struct ProvideProcess {
-    child: Child,
-}
-
-impl Drop for ProvideProcess {
-    fn drop(&mut self) {
-        self.child.kill().ok();
-        self.child.try_wait().ok();
-    }
+    match_get_stderr(get_stderr).await
 }
 
 fn compare_files(expect_path: impl AsRef<Path>, got_dir_path: impl AsRef<Path>) -> Result<()> {
@@ -195,8 +185,9 @@ fn compare_files(expect_path: impl AsRef<Path>, got_dir_path: impl AsRef<Path>) 
 /// Looks for regex matches on stderr output for the getter.
 ///
 /// Errors on the first regex mis-match or if the stderr output has fewer lines than expected
-fn match_get_stderr(stderr: Vec<u8>) -> Result<()> {
-    let stderr = std::io::BufReader::new(&stderr[..]);
+async fn match_get_stderr(stderr: Vec<u8>) -> Result<()> {
+    println!("{:?}", std::str::from_utf8(&stderr[..]));
+    let stderr = BufReader::new(&stderr[..]);
     assert_matches_line![
         stderr,
         r"Fetching: [\da-z]{59}"; 1,
@@ -213,7 +204,7 @@ fn match_get_stderr(stderr: Vec<u8>) -> Result<()> {
 /// that can be used to 'get' from another process.
 ///
 /// Errors on the first regex mismatch or if the stderr output has fewer lines than expected
-fn match_provide_output<T: Read>(
+async fn match_provide_output<T: AsyncRead + Unpin>(
     reader: BufReader<T>,
     num_blobs: usize,
     input: Input,
@@ -252,7 +243,7 @@ fn match_provide_output<T: Read>(
 /// # Examples
 /// ```
 /// let expr = b"hello world!\nNice to meet you!\n02/23/2023\n02/23/2023\n02/23/2023";
-/// let buf_reader = std::io::BufReader::new(&expr[..]);
+/// let buf_reader = tokio::io::BufReader::new(&expr[..]);
 /// assert_matches_line![
 ///     buf_reader,
 ///     r"hello world!"; 1,
@@ -268,9 +259,9 @@ macro_rules! assert_matches_line {
             $(
             let rx = regex::Regex::new($z)?;
             for _ in 0..$a {
-                let line = match lines.next().context(format!("Unexpected end of reader, attempting to match '{rx}'"))? {
-                    Ok(l) => l,
-                    Err(e) => { anyhow::bail!(e); }
+                let line = match lines.next_line().await.with_context(|| format!("Unexpected end of reader, attempting to match '{rx}'"))? {
+                    Some(l) => l,
+                    None => { anyhow::bail!("Unexpected end of reader, attempted to match '{rx}'"); }
                 };
                 if let Some(cap) = rx.captures(line.trim()) {
                     for i in 0..cap.len() {
