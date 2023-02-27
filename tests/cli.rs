@@ -130,29 +130,34 @@ fn test_provide_get_loop(path: &Path, input: Input, output: Output) -> Result<()
     // test provide output & get all in one ticket from stderr
     let all_in_one = match_provide_output(stdout, num_blobs, input)?;
 
-    // create a `get-ticket` cmd & optionally provide out path
-    let mut cmd = Command::new(iroh);
-    cmd.arg("get-ticket").arg(all_in_one);
-    let cmd = if let Some(ref out) = out {
-        cmd.arg("--out").arg(out)
-    } else {
-        &mut cmd
-    };
+    let (get_stdout, get_stderr) = {
+        // create a `get-ticket` cmd & optionally provide out path
+        let mut cmd = Command::new(iroh);
+        cmd.arg("get-ticket").arg(all_in_one);
+        let cmd = if let Some(ref out) = out {
+            cmd.arg("--out").arg(out)
+        } else {
+            &mut cmd
+        };
 
-    // test get stderr output
-    let get_output = cmd.output()?;
-    assert!(get_output.status.success());
-    match_get_stderr(get_output.stderr)?;
+        // test get stderr output
+        let get_output = cmd.output()?;
+        assert!(get_output.status.success());
+        (get_output.stdout, get_output.stderr)
+    };
 
     // test output
     match out {
         None => {
+            assert!(!get_stdout.is_empty());
             let expect_content = std::fs::read(path)?;
-            assert_eq!(expect_content, get_output.stdout);
-            Ok(())
+            assert_eq!(expect_content, get_stdout);
         }
-        Some(out) => compare_files(path, out),
-    }
+        Some(out) => compare_files(path, out)?,
+    };
+
+    assert!(!get_stderr.is_empty());
+    match_get_stderr(get_stderr)
 }
 
 /// Wrapping the [`Child`] process here allows us to impl the `Drop` trait ensuring the provide
@@ -263,7 +268,10 @@ macro_rules! assert_matches_line {
             $(
             let rx = regex::Regex::new($z)?;
             for _ in 0..$a {
-                let line = lines.next().context("Unexpected end of stderr reader")??;
+                let line = match lines.next().context(format!("Unexpected end of reader, attempting to match '{rx}'"))? {
+                    Ok(l) => l,
+                    Err(e) => { anyhow::bail!(e); }
+                };
                 if let Some(cap) = rx.captures(line.trim()) {
                     for i in 0..cap.len() {
                         if let Some(capture_group) = cap.get(i) {
