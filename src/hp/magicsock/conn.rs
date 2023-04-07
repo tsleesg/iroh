@@ -352,6 +352,7 @@ impl Conn {
 
     /// Triggers an address discovery. The provided why string is for debug logging only.
     pub async fn re_stun(&self, why: &'static str) {
+        tracing::debug!("{:?} calling re stun", self.inner.private_key.public_key());
         self.derp_sender.send_async(DerpMessage::ReStun(why)).await;
     }
 
@@ -531,6 +532,7 @@ impl Conn {
             if let Some(ref f) =
                 &*tokio::task::block_in_place(|| self.on_stun_receive.blocking_read())
             {
+                tracing::trace!(target: "update_net_info", "running on_stun_receive method");
                 f(b, meta.addr);
             }
             return false;
@@ -1430,6 +1432,7 @@ impl AsyncUdpSocket for Conn {
         transmits: &[quinn_proto::Transmit],
     ) -> Poll<io::Result<usize>> {
         debug!(
+            target: "poll_send",
             "sending:\n{}",
             transmits
                 .iter()
@@ -1492,7 +1495,7 @@ impl AsyncUdpSocket for Conn {
     ) -> Poll<io::Result<usize>> {
         // FIXME: currently ipv4 load results in ipv6 traffic being ignored
         debug_assert_eq!(bufs.len(), meta.len(), "non matching bufs & metas");
-        debug!("trying to receive up to {} packets", bufs.len());
+        debug!(target: "poll_recv", "trying to receive up to {} packets", bufs.len());
 
         let mut num_msgs_total = 0;
 
@@ -1801,7 +1804,7 @@ struct DerpHandler {
     on_endpoint_refreshed:
         HashMap<Endpoint, Box<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync + 'static>>,
     /// When set, is an AfterFunc timer that will call Conn::do_periodic_stun.
-    periodic_re_stun_timer: Option<time::Interval>,
+    periodic_re_stun_timer: time::Interval,
     /// The `NetInfo` provided in the last call to `net_info_func`. It's used to deduplicate calls to netInfoFunc.
     net_info_last: Option<cfg::NetInfo>,
 }
@@ -1825,7 +1828,7 @@ impl DerpHandler {
             last_endpoints: Vec::new(),
             last_endpoints_time: None,
             on_endpoint_refreshed: HashMap::new(),
-            periodic_re_stun_timer: None,
+            periodic_re_stun_timer: time::interval_at(tokio::time::Instant::now() + Duration::from_secs(100000), Duration::from_secs(1000000)),
             net_info_last: None,
         }
     }
@@ -1836,55 +1839,81 @@ impl DerpHandler {
         let mut recvs = futures::stream::FuturesUnordered::new();
 
         loop {
+            
+                            tracing::info!(target: "DerpHandler", "DerpHandler loop");
+
             tokio::select! {
                 msg = self.msg_receiver.recv_async() => {
                     match msg? {
                         DerpMessage::Shutdown => {
+                            tracing::info!(target: "DerpHandler", "DerpMessage::Shutdown");
                             self.close_all_derp("conn-close").await;
+
                             return Ok(());
                         }
                         DerpMessage::CloseAll(reason) => {
+
+                            tracing::info!(target: "DerpHandler", "DerpMessage::CloseAll");
                             self.close_all_derp(reason).await;
                         }
                         DerpMessage::Close(rid, reason) => {
+
+                            tracing::info!(target: "DerpHandler", "DerpMessage::Close");
                             self.close_derp(rid, reason).await;
                         }
                         DerpMessage::CloseOrReconnect(rid, reason) => {
+
+                            tracing::info!(target: "DerpHandler", "DerpMessage::CloseOrReconnect");
                             self.close_or_reconnect_derp(rid, reason).await;
                         }
                         DerpMessage::ReStun(reason) => {
+                            tracing::info!(target: "DerpHandler", "DerpMessage::Restun");
                             self.re_stun(reason).await;
                         }
                         DerpMessage::Connected(rs) => {
+
+                            tracing::info!(target: "DerpHandler", "DerpMessage::Connected");
+
                             recvs.push(rs.recv())
                         }
                         DerpMessage::WriteRequest { port, pub_key, content} => {
+                            tracing::info!(target: "DerpHandler", "DerpMessage::WriteRequest");
                             self.send(port, pub_key, content).await;
                         }
                         DerpMessage::EnqueueCallMeMaybe {
                             derp_addr,
                             endpoint,
                         } => {
+                            tracing::info!(target: "DerpHandler", "DerpMessage::EnqueueCallMeMaybe");
                             self.enqueue_call_me_maybe(derp_addr, endpoint).await;
                         }
                         DerpMessage::RebindAll(s) => {
+                            tracing::info!(target: "DerpHandler", "DerpMessage::RebindAll");
                             self.rebind_all().await;
                             s.send(());
                         }
                         DerpMessage::SetPreferredPort(port) => {
+                            tracing::info!(target: "DerpHandler", "DerpMessage::SetPreferredPort");
                             self.set_preferred_port(port).await;
                         }
                     }
                 }
                 Some((rs, result, action)) = recvs.next() => {
                     match action {
-                        ReadAction::None => {},
+                        ReadAction::None => {
+
+                            tracing::info!(target: "DerpHandler", "ReadAction::None");
+
+                        },
                         ReadAction::AddPeerRoute { peers, region, derp_client } => {
+
+                            tracing::info!(target: "DerpHandler", "ReadAction::AddPeerRoute");
                             for peer in peers {
                                 self.add_derp_peer_route(peer, region, derp_client.clone()).await;
                             }
                         },
                         ReadAction::RemovePeerRoute { peers, region, derp_client } => {
+                            tracing::info!(target: "DerpHandler", "ReadAction::RemovePeerRoute");
                             for peer in peers {
                                 self.remove_derp_peer_route(peer, region, &derp_client).await;
                             }
@@ -1892,31 +1921,45 @@ impl DerpHandler {
                     }
                     match result {
                         ReadResult::Break => {
+
+                            tracing::info!(target: "DerpHandler", "ReadResult::Break");
                             // drop client
                             continue;
                         }
                         ReadResult::Continue => {
+                            tracing::info!(target: "DerpHandler", "ReadResult::Continue");
                             recvs.push(rs.recv())
                         }
                         ReadResult::Yield(read_result) => {
+                            tracing::info!(target: "DerpHandler", "ReadResult::Yield");
+                            tracing::debug!(target: "update", "derp read result");
                             self.derp_recv_sender.send_async(read_result).await;
                             recvs.push(rs.recv());
                         }
                     }
                 }
-                _ =  OptionFuture::from(self.periodic_re_stun_timer.as_mut().map(|i| i.tick())) => {
+                _ =  self.periodic_re_stun_timer.tick() => {
+                            tracing::info!(target: "DerpHandler", "periodic re stun timer");
                     self.re_stun("periodic").await;
                 }
                 _ = endpoints_update_receiver.changed() => {
+
+                            tracing::info!(target: "DerpHandler", "endpoints_update_receiver");
+                    tracing::info!(target: "re_stun", "endpoints update receiver changed");
                     let reason = endpoints_update_receiver.borrow().clone();
                     if let Some(reason) = reason {
+                        tracing::info!(target: "re_stun", "self.update_endpoints");
                         self.update_endpoints(reason).await;
                     }
                 }
                 _ = cleanup_timer.tick() => {
+                            tracing::info!(target: "DerpHandler", "clientup timer tick");
                     self.clean_stale_derp().await;
                 }
-                else => {}
+                else => {
+
+                            tracing::info!(target: "DerpHandler", "else");
+                }
             }
         }
     }
@@ -2196,6 +2239,7 @@ impl DerpHandler {
         // metricReSTUNCalls.Add(1)
 
         if self.endpoints_update_state.is_running() {
+            tracing::info!(target: "re_stun", "endpoints_update_state.is_running()");
             if Some(why) != self.endpoints_update_state.want_update {
                 debug!(
                     "re_stun({:?}): endpoint update active, need another later: {:?}",
@@ -2204,6 +2248,7 @@ impl DerpHandler {
                 self.endpoints_update_state.want_update.replace(why);
             }
         } else {
+            tracing::info!(target: "re_stun", "endpoints_update_state.running.send");
             debug!("re_stun({}): started", why);
             self.endpoints_update_state
                 .running
@@ -2216,16 +2261,17 @@ impl DerpHandler {
         // TODO:
         // metricUpdateEndpoints.Add(1)
 
-        debug!("starting endpoint update ({})", why);
+        info!(target: "re_stun", "starting endpoint update ({})", why);
         if self.conn.no_v4_send.load(Ordering::Relaxed) {
             if !self.conn.is_closed() {
-                debug!("last netcheck reported send error. Rebinding.");
+                info!(target: "re_stun", "last netcheck reported send error. Rebinding.");
                 self.rebind_all().await;
             }
         }
 
         match self.determine_endpoints().await {
             Ok(endpoints) => {
+                info!(target: "re_stun", "determind endpoints ({}): {:#?}", why, endpoints);
                 if self.set_endpoints(&endpoints).await {
                     log_endpoint_change(&endpoints);
                     if let Some(ref cb) = self.conn.on_endpoints {
@@ -2234,7 +2280,7 @@ impl DerpHandler {
                 }
             }
             Err(err) => {
-                info!("endpoint update ({}) failed: {:#?}", why, err);
+                info!(target: "re_stun", "endpoint update ({}) failed: {:#?}", why, err);
                 // TODO(crawshaw): are there any conditions under which
                 // we should trigger a retry based on the error here?
             }
@@ -2243,7 +2289,7 @@ impl DerpHandler {
         let new_why = self.endpoints_update_state.want_update.take();
         if !self.conn.is_closed() {
             if let Some(new_why) = new_why {
-                debug!("endpoint update: needed new ({})", new_why);
+                info!(target: "re_stun", "endpoint update: needed new ({})", new_why);
                 self.endpoints_update_state
                     .running
                     .send(Some(new_why))
@@ -2257,15 +2303,15 @@ impl DerpHandler {
                     let mut rng = rand::thread_rng();
                     rng.gen_range(Duration::from_secs(20)..=Duration::from_secs(26))
                 };
-                debug!("scheduling periodic_stun to run in {}s", d.as_secs());
-                self.periodic_re_stun_timer.replace(time::interval(d));
+                info!(target: "update_net_info", "scheduling periodic_stun to run in {}s", d.as_secs());
+                self.periodic_re_stun_timer = time::interval_at(tokio::time::Instant::now() + d, d);
             } else {
-                debug!("periodic STUN idle");
+                info!(target: "re_stun", "periodic STUN idle");
                 self.stop_periodic_re_stun_timer();
             }
         }
 
-        debug!("endpoint update done ({})", why);
+        info!(target: "re_stun", "endpoint update done ({})", why);
     }
 
     fn should_do_periodic_re_stun(&self) -> bool {
@@ -2282,7 +2328,7 @@ impl DerpHandler {
     }
 
     fn stop_periodic_re_stun_timer(&mut self) {
-        self.periodic_re_stun_timer.take();
+        self.periodic_re_stun_timer = time::interval_at(tokio::time::Instant::now() + Duration::from_secs(100000), Duration::from_secs(1000000));
     }
 
     /// Returns the machine's endpoint addresses. It does a STUN lookup (via netcheck)
@@ -2429,16 +2475,19 @@ impl DerpHandler {
     }
 
     async fn update_net_info(&mut self) -> Result<Arc<netcheck::Report>> {
+        tracing::trace!(target: "update_net_info", "update_net_info");
         let dm = self.conn.derp_map.read().await.clone();
         if dm.is_none() {
+            tracing::trace!(target: "update_net_info", "update_net_info: dm.is_none()");
             return Ok(Default::default());
         }
 
         let conn = self.conn.clone();
 
-        let report = time::timeout(Duration::from_secs(2), async move {
+        let report = time::timeout(Duration::from_secs(25), async move {
             let dm = dm.unwrap();
             let net_checker = conn.net_checker.clone();
+            tracing::trace!(target: "update_net_info", "update_net_info: on_stun_receive write");
             *conn.on_stun_receive.write().await = Some(Box::new(move |a, b| {
                 let a = a.to_vec(); // :(
                 let net_checker = net_checker.clone();
@@ -2446,11 +2495,21 @@ impl DerpHandler {
                     net_checker.receive_stun_packet(&a, b).await;
                 })
             }));
+ 
+        tracing::trace!(target: "update_net_info", "update_net_info: after on_stun_receive write");
+
             let report = conn.net_checker.get_report(&dm).await?;
+
+        tracing::trace!(target: "update_net_info", "update_net_info:  after get_report");
             *conn.last_net_check_report.write().await = Some(report.clone());
+
+        tracing::trace!(target: "update_net_info", "update_net_info: wrote last net check report");
+
             Ok::<_, anyhow::Error>(report)
         })
         .await??;
+
+        tracing::trace!(target: "update_net_info", "update_net_info: got report");
 
         let r = &report;
         self.conn
@@ -2485,6 +2544,8 @@ impl DerpHandler {
             // Perhaps UDP is blocked. Pick a deterministic but arbitrary one.
             ni.preferred_derp = self.pick_derp_fallback().await;
         }
+
+        tracing::trace!(target: "update_net_info", "update_net_info: set_nearest_derp");
         if !self.set_nearest_derp(ni.preferred_derp.try_into()?).await {
             ni.preferred_derp = 0;
         }
@@ -2730,6 +2791,7 @@ impl DerpHandler {
         }))
         .await;
 
+        tracing::trace!(target: "update_net_info", "update_net_info: derp connect");
         self.connect(derp_num, None).await;
         true
     }
@@ -3109,7 +3171,7 @@ mod tests {
             net::tcp::OwnedWriteHalf,
             derp::http::Client,
         > = derp::Server::new(key::node::SecretKey::generate(), None);
-
+        println!("derping");
         let http_listener = net::TcpListener::bind("127.0.0.1:0").await?;
         let http_addr = http_listener.local_addr()?;
 
@@ -3350,6 +3412,28 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_two_magicstack() -> Result<()> {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+            .with(EnvFilter::from_default_env())
+            .try_init()
+            .ok();
+
+        let devices = Devices {
+            stun_ip: "127.0.0.1".parse()?,
+        };
+
+        let (derp_map, cleanup) = run_derp_and_stun(devices.stun_ip).await?;
+
+        let m1 = MagicStack::new(derp_map.clone()).await?;
+        // let m2 = MagicStack::new(derp_map.clone()).await?;
+        println!("time start");
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        println!("time end");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_two_devices_roundtrip() -> Result<()> {
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
@@ -3364,8 +3448,10 @@ mod tests {
         let (derp_map, cleanup) = run_derp_and_stun(devices.stun_ip).await?;
 
         let m1 = MagicStack::new(derp_map.clone()).await?;
+        tokio::time::sleep(Duration::from_secs(7)).await;
         let m2 = MagicStack::new(derp_map.clone()).await?;
 
+        tokio::time::sleep(Duration::from_secs(7)).await;
         let cleanup_mesh = mesh_stacks(vec![m1.clone(), m2.clone()]).await?;
 
         // Wait for magicsock to be told about peers from mesh_stacks.

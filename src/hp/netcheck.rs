@@ -1,6 +1,3 @@
-//! Checks the network conditions from the current host.
-//! Based on https://github.com/tailscale/tailscale/blob/main/net/netcheck/netcheck.go
-
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -20,6 +17,7 @@ use tokio::{
     task::JoinSet,
     time::Duration,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use crate::net::{interfaces, ip::to_canonical};
@@ -37,7 +35,7 @@ const DOT_INVALID: &str = ".invalid";
 // The various default timeouts for things.
 
 /// The maximum amount of time netcheck will spend gathering a single report.
-const OVERALL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const OVERALL_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The maximum amount of time netcheck will spend probing with STUN packets without getting a
 /// reply before switching to HTTP probing, on the assumption that outbound UDP is blocked.
@@ -331,10 +329,21 @@ impl Client {
         // metricNumGetReport.Add(1)
 
         // Wrap in timeout
-        let report_state = self
+        let report_state = match self
             .clock
             .timeout(OVERALL_PROBE_TIMEOUT, self.clone().get_report_inner(dm))
-            .await??;
+            .await
+        {
+            Err(e) => {
+                tracing::error!("get_report_inner timeout: {e}");
+                anyhow::bail!(e);
+            }
+            Ok(Err(e)) => {
+                tracing::error!("get_report_inner error: {e}");
+                anyhow::bail!(e);
+            }
+            Ok(Ok(rs)) => rs,
+        };
         let report = self.finish_and_store_report(report_state, dm).await;
         debug!("get_report:end");
         Ok(report)
@@ -444,8 +453,10 @@ impl Client {
                 let rs = rs.clone();
                 let port_mapper = port_mapper.clone();
                 socket_tasks.spawn(async move {
+                    debug!("probe_port_map_services");
                     rs.probe_port_map_services(port_mapper).await;
                     worker.done();
+                    debug!("probe_port_map_serives done");
                 });
             }
         }
@@ -533,6 +544,7 @@ impl Client {
         }
 
         let mut task_set = JoinSet::new();
+        let mut i = 0;
         for probe_set in plan.values() {
             for probe in probe_set {
                 let probe = probe.clone();
@@ -541,22 +553,44 @@ impl Client {
 
                 let probe_done = Arc::new(sync::Notify::new());
                 let in_flight = in_flight.clone();
+
                 task_set.spawn(async move {
+                    debug!("run_prove start {i}");
                     let notified = probe_done.notified();
+                    debug!("notified {i}");
                     rs.run_probe(&dm, probe, probe_done.clone(), in_flight)
                         .await;
+                    debug!("after run_probe {i}");
                     // wait for the probe to actually finish
                     notified.await;
+                    debug!("run_probe done {i}");
                 });
+                i += 1;
             }
         }
 
         let stun_timer = self.clock.sleep(STUN_PROBE_TIMEOUT);
-        let probes_done = async move {
-            while let Some(t) = task_set.join_next().await {
-                t?;
+        let cancel_probes = CancellationToken::new();
+        let cancel_probes_canceller = cancel_probes.clone();
+        let (probes_done_sender, probes_done_recv) = oneshot::channel();
+        let probes_task = async move {
+            loop {
+                tokio::select! {
+                    _ = cancel_probes.cancelled() => {
+                        debug!("task_set shutting down");
+                        task_set.shutdown().await;
+                        debug!("shutdown task set");
+                        break;
+                    },
+                    res = task_set.join_next() => {
+                        match res {
+                            None => { break; }
+                            Some(_) => {debug!("task_set join_next");}
+                        }
+                    }
+                }
             }
-            Ok::<_, Error>(())
+            let _ = probes_done_sender.send(());
         };
 
         let probes_aborted = rs.stop_probe.clone();
@@ -564,27 +598,35 @@ impl Client {
         tokio::select! {
             _ = stun_timer => {
                 debug!("STUN timer expired");
+                cancel_probes_canceller.cancel();
             },
-            _ = probes_done => {
+            _ = probes_done_recv => {
                 // All of our probes finished, so if we have >0 responses, we
                 // stop our captive portal check.
                 if rs.any_udp().await {
                     if let Some(task) = captive_task {
                         task.abort();
+                        let _ = task.await;
+                        debug!("probes aborted: captive_task done ");
                     }
                 }
             }
             _ = probes_aborted.notified() => {
                 // Saw enough regions.
                 debug!("saw enough regions; not waiting for rest");
+                cancel_probes_canceller.cancel();
                 // We can stop the captive portal check since we know that we
                 // got a bunch of STUN responses.
                 if let Some(task) = captive_task {
-                    task.abort();
+                        task.abort();
+                        let _ = task.await;
+                        debug!("probes aborted: captive_task done ");
+
                 }
             }
         }
 
+        debug!("wait hair check");
         rs.wait_hair_check(last.as_deref()).await;
         debug!("hair_check done");
 
@@ -621,12 +663,14 @@ impl Client {
                     if let Err(err) = measure_all_icmp_latency(&rs, &need, &clock).await {
                         debug!("measure_all_icmp_latency: {:?}", err);
                     }
+                    debug!("measure_all_icmp_latency done");
                 });
                 debug!("UDP is blocked, trying HTTPS");
             }
             for reg in need.into_iter() {
                 let rs = rs.clone();
                 task_set.spawn(async move {
+                    debug!("spawn measure_https_latency");
                     match measure_https_latency(&reg).await {
                         Ok((d, ip)) => {
                             let mut report = rs.report.write().await;
@@ -653,23 +697,30 @@ impl Client {
                             );
                         }
                     }
+                    debug!("spawn measure_https_latency done");
                 });
             }
             while let Some(t) = task_set.join_next().await {
+                debug!("task_set done");
                 t?;
             }
         }
 
         // Wait for captive portal check before finishing the report.
         // If the task is aborted, this will error, so ignore potential task joining errors.
+        debug!("waiting captive portal done");
         captive_portal_done.await.ok();
 
         // Cleanup in_flights
+        debug!("waiting cleanup in flights");
         in_flight.0.lock().await.clear();
 
         // Cleanup socket tasks
-        socket_tasks.abort_all();
-
+        debug!("socket tasks shutdown");
+        socket_tasks.shutdown().await;
+        debug!("probes_task await");
+        probes_task.await;
+        debug!("probes_task done");
         Ok(rs)
     }
 
@@ -1364,8 +1415,7 @@ impl ReportState {
         // If the probe is for IPv6 and we don't yet have an IPv6 report, that would help.
         if probe.proto == ProbeProto::IPv6 && report.region_v6_latency.is_empty() {
             return true;
-        }
-
+        };
         // For IPv4, we need at least two IPv4 results overall to
         // determine whether we're behind a NAT that shows us as
         // different source IPs and/or ports depending on who we're

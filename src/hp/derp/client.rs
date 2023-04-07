@@ -73,6 +73,7 @@ impl<R: AsyncRead + Unpin> Client<R> {
     ///
     /// Errors if the packet is larger than [`MAX_PACKET_SIZE`]
     pub async fn send(&self, dstkey: PublicKey, packet: Vec<u8>) -> Result<()> {
+        tracing::warn!(target: "derp_client", "sending packet to {dstkey:?}");
         self.inner
             .writer_channel
             .send(ClientWriterMessage::Packet((dstkey, packet)))
@@ -223,6 +224,7 @@ impl<R: AsyncRead + Unpin> Client<R> {
                         continue;
                     }
                     let (source, data) = parse_recv_frame(&frame_payload)?;
+                    tracing::warn!(target: "derp_client", "client received packet from {source:?}");
                     let packet = ReceivedMessage::ReceivedPacket {
                         source,
                         data: data.to_vec(),

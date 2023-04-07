@@ -425,6 +425,7 @@ where
                        },
                         ServerMessage::SendPacket((key, packet)) => {
                             let src = packet.src.clone();
+                            tracing::warn!("sending packet from {src:?} to {key:?}");
                             if self.clients.contains_key(&key) {
                                 // if this client is in our local network, just try to send the
                                 // packet
@@ -441,6 +442,7 @@ where
                         }
                        ServerMessage::SendDiscoPacket((key, packet)) => {
                             let src = packet.src.clone();
+                            tracing::warn!("sending disco packet from {src:?} to {key:?}");
                             if self.clients.contains_key(&key) {
                                 // if this client is in our local network, just try to send the
                                 // packet
@@ -457,6 +459,7 @@ where
                        }
                        ServerMessage::CreateClient(client_builder) => {
                            let key = client_builder.key.clone();
+                           tracing::warn!("Creating Client {key:?}");
                            // add client to mesh
                             if !self.client_mesh.contains_key(&key) {
                                 // `None` means its a local client (so it doesn't need a packet
@@ -471,6 +474,7 @@ where
 
                         }
                        ServerMessage::RemoveClient(key) => {
+                           tracing::warn!("Removing client {key:?}");
                            // remove the client from the map of clients, & notify any peers that it
                            // has sent messages that it has left the network
                            self.clients.unregister(&key);
