@@ -6,6 +6,8 @@ pub mod get;
 #[cfg(feature = "metrics")]
 pub mod metrics;
 pub mod net;
+#[cfg(feature = "porcelain")]
+pub mod porcelain;
 pub mod progress;
 pub mod protocol;
 pub mod provider;

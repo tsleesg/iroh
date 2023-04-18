@@ -14,29 +14,25 @@ use indicatif::{
 use iroh::blobs::{Blob, Collection};
 use iroh::get::{get_data_path, get_missing_range, get_missing_ranges, OnBlobData};
 use iroh::protocol::{AuthToken, GetRequest, RangeSpecSeq};
-use iroh::provider::{Database, Provider, Ticket};
+use iroh::provider::{Database, DefaultCustomHandler, Ticket};
 use iroh::rpc_protocol::*;
 use iroh::rpc_protocol::{
     ListRequest, ProvideRequest, ProviderRequest, ProviderResponse, ProviderService, VersionRequest,
 };
-use quic_rpc::transport::quinn::{QuinnConnection, QuinnServerEndpoint};
-use quic_rpc::{RpcClient, ServiceEndpoint};
+use quic_rpc::transport::quinn::QuinnConnection;
+use quic_rpc::RpcClient;
 use tokio::io::AsyncWriteExt;
 use tracing_subscriber::{prelude::*, EnvFilter};
-mod main_util;
 
-use iroh::{get, provider, Hash, Keypair, PeerId};
-use main_util::Blake3Cid;
+use iroh::{get, Hash, PeerId};
 
-use crate::main_util::{iroh_data_root, pathbuf_from_name};
+use iroh::porcelain::{iroh_data_root, pathbuf_from_name, provide, Blake3Cid};
 
 #[cfg(feature = "metrics")]
 use iroh::metrics::init_metrics;
 
 const DEFAULT_RPC_PORT: u16 = 0x1337;
 const RPC_ALPN: [u8; 17] = *b"n0/provider-rpc/1";
-const MAX_RPC_CONNECTIONS: u32 = 16;
-const MAX_RPC_STREAMS: u64 = 1024;
 const MAX_CONCURRENT_DIALS: u8 = 16;
 
 #[derive(Parser, Debug, Clone)]
@@ -560,6 +556,7 @@ async fn main_impl() -> Result<()> {
             };
             let key = Some(iroh_data_root.join("keypair"));
 
+            let custom_handler = DefaultCustomHandler;
             let provider = provide(
                 db.clone(),
                 addr,
@@ -567,6 +564,7 @@ async fn main_impl() -> Result<()> {
                 key,
                 cli.keylog,
                 rpc_port.into(),
+                custom_handler,
             )
             .await?;
             let controller = provider.controller();
@@ -709,84 +707,6 @@ async fn main_impl() -> Result<()> {
         drop(metrics_fut);
     }
     r
-}
-
-async fn provide(
-    db: Database,
-    addr: Option<SocketAddr>,
-    auth_token: Option<String>,
-    key: Option<PathBuf>,
-    keylog: bool,
-    rpc_port: Option<u16>,
-) -> Result<Provider> {
-    let keypair = get_keypair(key).await?;
-
-    let mut builder = provider::Provider::builder(db).keylog(keylog);
-    if let Some(addr) = addr {
-        builder = builder.bind_addr(addr);
-    }
-    if let Some(ref encoded) = auth_token {
-        let auth_token = AuthToken::from_str(encoded)?;
-        builder = builder.auth_token(auth_token);
-    }
-    let provider = if let Some(rpc_port) = rpc_port {
-        let rpc_endpoint = make_rpc_endpoint(&keypair, rpc_port)?;
-        builder
-            .rpc_endpoint(rpc_endpoint)
-            .keypair(keypair)
-            .spawn()?
-    } else {
-        builder.keypair(keypair).spawn()?
-    };
-
-    println!("Listening address: {}", provider.local_address());
-    println!("PeerID: {}", provider.peer_id());
-    println!("Auth token: {}", provider.auth_token());
-    println!();
-    Ok(provider)
-}
-
-fn make_rpc_endpoint(
-    keypair: &Keypair,
-    rpc_port: u16,
-) -> Result<impl ServiceEndpoint<ProviderService>> {
-    let rpc_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, rpc_port));
-    let rpc_quinn_endpoint = quinn::Endpoint::server(
-        iroh::provider::make_server_config(
-            keypair,
-            MAX_RPC_STREAMS,
-            MAX_RPC_CONNECTIONS,
-            vec![RPC_ALPN.to_vec()],
-        )?,
-        rpc_addr,
-    )?;
-    let rpc_endpoint =
-        QuinnServerEndpoint::<ProviderRequest, ProviderResponse>::new(rpc_quinn_endpoint)?;
-    Ok(rpc_endpoint)
-}
-
-async fn get_keypair(key: Option<PathBuf>) -> Result<Keypair> {
-    match key {
-        Some(key_path) => {
-            if key_path.exists() {
-                let keystr = tokio::fs::read(key_path).await?;
-                let keypair = Keypair::try_from_openssh(keystr)?;
-                Ok(keypair)
-            } else {
-                let keypair = Keypair::generate();
-                let ser_key = keypair.to_openssh()?;
-                if let Some(parent) = key_path.parent() {
-                    tokio::fs::create_dir_all(parent).await?;
-                }
-                tokio::fs::write(key_path, ser_key).await?;
-                Ok(keypair)
-            }
-        }
-        None => {
-            // No path provided, just generate one
-            Ok(Keypair::generate())
-        }
-    }
 }
 
 #[derive(Debug)]

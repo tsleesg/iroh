@@ -5,8 +5,8 @@ use std::{
     str::FromStr,
 };
 
+use crate::Hash;
 use anyhow::{anyhow, Result};
-use iroh::Hash;
 
 /// name of directory that wraps all iroh files in a given application directory
 const IROH_DIR: &str = "iroh";
