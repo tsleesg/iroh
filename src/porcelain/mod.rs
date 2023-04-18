@@ -18,6 +18,10 @@ const MAX_RPC_CONNECTIONS: u32 = 16;
 const MAX_RPC_STREAMS: u64 = 1024;
 const RPC_ALPN: [u8; 17] = *b"n0/provider-rpc/1";
 
+/// Generates an [`Keypair`], either by reading an existing key file, or by generating a new one.
+///
+/// Returns a `Result` containing the generated `Keypair`, or an error if one occured while trying
+/// to open the file at the given [`PathBuf`].
 pub async fn get_keypair(key: Option<PathBuf>) -> Result<Keypair> {
     match key {
         Some(key_path) => {
@@ -42,7 +46,7 @@ pub async fn get_keypair(key: Option<PathBuf>) -> Result<Keypair> {
     }
 }
 
-/// provide
+/// Construct a Provider
 pub async fn provide<C: CustomHandler>(
     db: Database,
     addr: Option<SocketAddr>,
@@ -75,11 +79,25 @@ pub async fn provide<C: CustomHandler>(
         builder.keypair(keypair).spawn()?
     };
 
-    println!("Listening address: {}", provider.local_address());
+    Ok(provider)
+}
+
+/// Print the listening addresses, the [`PeerId`], and the autho token for this provider
+///
+/// This should be called after the [`Provider`] has already connected, otherwise the listening address
+/// will not be accurate.
+///
+/// Can error if there are issues getting the listening address.
+pub fn display_provider_info(provider: &Provider) -> anyhow::Result<()> {
+    let addrs = provider.listen_addresses()?;
+    println!("Listening addresses:");
+    for addr in addrs {
+        println!("\t{addr}");
+    }
     println!("PeerID: {}", provider.peer_id());
     println!("Auth token: {}", provider.auth_token());
     println!();
-    Ok(provider)
+    Ok(())
 }
 
 fn make_rpc_endpoint(

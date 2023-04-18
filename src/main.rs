@@ -573,6 +573,7 @@ async fn main_impl() -> Result<()> {
             let fut = {
                 let provider = provider.clone();
                 tokio::spawn(async move {
+                    iroh::porcelain::display_provider_info(&provider)?;
                     let (path, tmp_path) = if let Some(path) = path {
                         let absolute = path.canonicalize()?;
                         println!("Adding {} as {}...", path.display(), absolute.display());
