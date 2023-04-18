@@ -421,8 +421,7 @@ impl Database {
         items.into_iter()
     }
 
-    #[cfg(test)]
-    pub(crate) fn to_inner(&self) -> HashMap<Hash, BlobOrCollection> {
+    pub fn to_inner(&self) -> HashMap<Hash, BlobOrCollection> {
         self.0.read().unwrap().clone()
     }
 }

@@ -115,7 +115,7 @@ where
 
 /// A [`Database`] entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum BlobOrCollection {
+pub enum BlobOrCollection {
     Blob {
         /// The bao outboard data.
         outboard: Bytes,
