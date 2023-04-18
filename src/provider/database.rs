@@ -397,7 +397,7 @@ impl Database {
         self.0.read().unwrap().get(key).cloned()
     }
 
-    pub(crate) fn union_with(&self, db: HashMap<Hash, BlobOrCollection>) {
+    pub fn union_with(&self, db: HashMap<Hash, BlobOrCollection>) {
         let mut inner = self.0.write().unwrap();
         for (k, v) in db {
             inner.entry(k).or_insert(v);
