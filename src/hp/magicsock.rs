@@ -5,6 +5,7 @@
 mod conn;
 mod derp_actor;
 mod endpoint;
+#[cfg(feature = "network")]
 mod rebinding_conn;
 mod timer;
 mod udp_actor;

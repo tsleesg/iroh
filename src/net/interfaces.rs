@@ -324,7 +324,7 @@ pub struct DefaultRouteDetails {
 }
 
 impl DefaultRouteDetails {
-    /// Reads the default route from the current system and returns the details.
+    /// Reads the default route from the current system and returns the details
     pub async fn new() -> Option<Self> {
         default_route().await
     }

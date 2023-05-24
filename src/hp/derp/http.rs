@@ -1,8 +1,10 @@
 mod client;
+#[cfg(feature = "network")]
 mod server;
 
 pub use client::{Client, ClientBuilder, ClientError};
 
+#[cfg(feature = "network")]
 pub use server::derp_connection_handler;
 
 pub(crate) const HTTP_UPGRADE_PROTOCOL: &str = "iroh derp http";

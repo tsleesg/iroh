@@ -45,12 +45,23 @@ pub struct Hostinfo {
     pub net_info: Option<NetInfo>,
 }
 
+#[cfg(feature = "network")]
+fn get_hostname() -> String {
+    hostname::get()
+        .ok()
+        .and_then(|s| s.into_string().ok())
+        .unwrap_or_default()
+}
+
+#[cfg(not(feature = "network"))]
+fn get_hostname() -> String {
+    // TODO: can we do better in wasm?
+    "unknown".to_string()
+}
+
 impl Default for Hostinfo {
     fn default() -> Self {
-        let hostname = hostname::get()
-            .ok()
-            .and_then(|s| s.into_string().ok())
-            .unwrap_or_default();
+        let hostname = get_hostname();
         // grab the first label
         let hostname = hostname.split('.').next().unwrap_or_default().to_string();
         let os = os_info::get();

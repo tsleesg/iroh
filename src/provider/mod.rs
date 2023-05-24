@@ -23,10 +23,12 @@ use bao_tree::outboard::PreOrderMemOutboardRef;
 use bytes::{Bytes, BytesMut};
 use futures::future::{BoxFuture, Shared};
 use futures::{FutureExt, Stream, TryFutureExt};
-use quic_rpc::server::RpcChannel;
-use quic_rpc::transport::flume::FlumeConnection;
-use quic_rpc::transport::misc::DummyServerEndpoint;
-use quic_rpc::{RpcClient, RpcServer, ServiceConnection, ServiceEndpoint};
+use quic_rpc::{
+    server::RpcChannel,
+    transport::flume::FlumeConnection,
+    transport::misc::DummyServerEndpoint,
+    {RpcClient, RpcServer, ServiceConnection, ServiceEndpoint},
+};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinError;
