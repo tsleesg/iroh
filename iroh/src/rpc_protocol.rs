@@ -204,6 +204,7 @@ pub enum ProviderRequest {
     Addrs(AddrsRequest),
     Shutdown(ShutdownRequest),
     Validate(ValidateRequest),
+    Document(DocumentRequest),
 }
 
 /// The response enum, listing all possible responses.
@@ -219,6 +220,113 @@ pub enum ProviderResponse {
     Addrs(AddrsResponse),
     Validate(ValidateProgress),
     Shutdown(()),
+    Document(DocumentResponse),
+}
+
+#[allow(missing_docs)]
+#[derive(Debug, Serialize, Deserialize, From, TryInto)]
+pub enum DocumentRequest {
+    Create(CreateRequest),
+    Delete(DeleteRequest),
+}
+
+/// Create a new document
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateRequest {
+    name: String,
+}
+
+impl RpcMsg<ProviderService> for CreateRequest {
+    type Response = CreateResponse;
+}
+
+impl From<CreateRequest> for ProviderRequest {
+    fn from(value: CreateRequest) -> Self {
+        ProviderRequest::Document(value.into())
+    }
+}
+
+impl TryFrom<ProviderRequest> for CreateRequest {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ProviderRequest) -> Result<Self, Self::Error> {
+        Ok(Self::try_from(DocumentRequest::try_from(value)?)?)
+    }
+}
+
+impl From<CreateResponse> for ProviderResponse {
+    fn from(value: CreateResponse) -> Self {
+        ProviderResponse::Document(value.into())
+    }
+}
+
+impl TryFrom<ProviderResponse> for CreateResponse {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ProviderResponse) -> Result<Self, Self::Error> {
+        Ok(Self::try_from(DocumentResponse::try_from(value)?)?)
+    }
+}
+
+impl From<DeleteRequest> for ProviderRequest {
+    fn from(value: DeleteRequest) -> Self {
+        ProviderRequest::Document(value.into())
+    }
+}
+
+impl TryFrom<ProviderRequest> for DeleteRequest {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ProviderRequest) -> Result<Self, Self::Error> {
+        Ok(Self::try_from(DocumentRequest::try_from(value)?)?)
+    }
+}
+
+impl From<DeleteProgress> for ProviderResponse {
+    fn from(value: DeleteProgress) -> Self {
+        ProviderResponse::Document(value.into())
+    }
+}
+
+impl TryFrom<ProviderResponse> for DeleteProgress {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ProviderResponse) -> Result<Self, Self::Error> {
+        Ok(Self::try_from(DocumentResponse::try_from(value)?)?)
+    }
+}
+
+/// Delete a document
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteRequest {
+    id: String,
+}
+
+impl Msg<ProviderService> for DeleteRequest {
+    type Pattern = ServerStreaming;
+}
+
+impl ServerStreamingMsg<ProviderService> for DeleteRequest {
+    type Response = DeleteProgress;
+}
+
+#[allow(missing_docs)]
+#[derive(Debug, Serialize, Deserialize, From, TryInto)]
+pub enum DocumentResponse {
+    Create(CreateResponse),
+    Delete(DeleteProgress),
+}
+
+/// Delete progress
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteProgress {
+    percentage: f64,
+}
+
+/// Create response
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateResponse {
+    id: String,
 }
 
 impl Service for ProviderService {

@@ -34,7 +34,7 @@ use iroh_net::{
     tls::{self, Keypair, PeerId},
     MagicEndpoint,
 };
-use quic_rpc::server::RpcChannel;
+use quic_rpc::server::{RpcChannel, RpcServerError};
 use quic_rpc::transport::flume::FlumeConnection;
 use quic_rpc::transport::misc::DummyServerEndpoint;
 use quic_rpc::{RpcClient, RpcServer, ServiceConnection, ServiceEndpoint};
@@ -45,7 +45,8 @@ use tracing::{debug, trace};
 
 use crate::dial::Ticket;
 use crate::rpc_protocol::{
-    AddrsRequest, AddrsResponse, IdRequest, IdResponse, ListBlobsRequest, ListBlobsResponse,
+    AddrsRequest, AddrsResponse, CreateRequest, CreateResponse, DeleteProgress, DeleteRequest,
+    DocumentRequest, IdRequest, IdResponse, ListBlobsRequest, ListBlobsResponse,
     ListCollectionsRequest, ListCollectionsResponse, ProvideRequest, ProviderRequest,
     ProviderResponse, ProviderService, ShutdownRequest, ValidateRequest, VersionRequest,
     VersionResponse, WatchRequest, WatchResponse,
@@ -805,6 +806,38 @@ impl<D: BaoMap + BaoReadonlyDb, C: CollectionParser> RpcHandler<D, C> {
     }
 }
 
+/// handle requests for document related RPC calls
+struct DocumentHandler;
+
+impl DocumentHandler {
+    async fn handle_create(self, _msg: CreateRequest) -> CreateResponse {
+        todo!()
+    }
+
+    fn handle_delete(
+        self,
+        _msg: DeleteRequest,
+    ) -> impl Stream<Item = DeleteProgress> + Send + 'static {
+        // todo
+        futures::stream::empty()
+    }
+}
+
+async fn handle_document_request<E: ServiceEndpoint<ProviderService>>(
+    msg: DocumentRequest,
+    chan: RpcChannel<ProviderService, E>,
+    handler: DocumentHandler,
+) -> std::result::Result<(), RpcServerError<E>> {
+    use DocumentRequest::*;
+    match msg {
+        Create(msg) => chan.rpc(msg, handler, DocumentHandler::handle_create).await,
+        Delete(msg) => {
+            chan.server_streaming(msg, handler, DocumentHandler::handle_delete)
+                .await
+        }
+    }
+}
+
 fn handle_rpc_request<
     D: BaoReadonlyDb,
     E: ServiceEndpoint<ProviderService>,
@@ -840,6 +873,7 @@ fn handle_rpc_request<
                 chan.server_streaming(msg, handler, RpcHandler::validate)
                     .await
             }
+            Document(msg) => handle_document_request(msg, chan, DocumentHandler).await,
         }
     });
 }
