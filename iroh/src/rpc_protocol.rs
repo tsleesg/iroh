@@ -240,61 +240,30 @@ impl RpcMsg<ProviderService> for CreateRequest {
     type Response = CreateResponse;
 }
 
-impl From<CreateRequest> for ProviderRequest {
-    fn from(value: CreateRequest) -> Self {
-        ProviderRequest::Document(value.into())
-    }
+macro_rules! nested_enum_instances {
+    ($enum: ty, $via: ty, $case: ty) => {
+        /// Convert from the nested enum case to the outer enum
+        impl From<$case> for $enum {
+            fn from(value: $case) -> Self {
+                Self::from(<$via>::from(value))
+            }
+        }
+
+        /// tryconvert from the outer enum to the nested enum case
+        impl TryFrom<$enum> for $case {
+            type Error = anyhow::Error;
+
+            fn try_from(value: $enum) -> Result<Self, Self::Error> {
+                Ok(Self::try_from(<$via>::try_from(value)?)?)
+            }
+        }
+    };
 }
 
-impl TryFrom<ProviderRequest> for CreateRequest {
-    type Error = anyhow::Error;
-
-    fn try_from(value: ProviderRequest) -> Result<Self, Self::Error> {
-        Ok(Self::try_from(DocumentRequest::try_from(value)?)?)
-    }
-}
-
-impl From<CreateResponse> for ProviderResponse {
-    fn from(value: CreateResponse) -> Self {
-        ProviderResponse::Document(value.into())
-    }
-}
-
-impl TryFrom<ProviderResponse> for CreateResponse {
-    type Error = anyhow::Error;
-
-    fn try_from(value: ProviderResponse) -> Result<Self, Self::Error> {
-        Ok(Self::try_from(DocumentResponse::try_from(value)?)?)
-    }
-}
-
-impl From<DeleteRequest> for ProviderRequest {
-    fn from(value: DeleteRequest) -> Self {
-        ProviderRequest::Document(value.into())
-    }
-}
-
-impl TryFrom<ProviderRequest> for DeleteRequest {
-    type Error = anyhow::Error;
-
-    fn try_from(value: ProviderRequest) -> Result<Self, Self::Error> {
-        Ok(Self::try_from(DocumentRequest::try_from(value)?)?)
-    }
-}
-
-impl From<DeleteProgress> for ProviderResponse {
-    fn from(value: DeleteProgress) -> Self {
-        ProviderResponse::Document(value.into())
-    }
-}
-
-impl TryFrom<ProviderResponse> for DeleteProgress {
-    type Error = anyhow::Error;
-
-    fn try_from(value: ProviderResponse) -> Result<Self, Self::Error> {
-        Ok(Self::try_from(DocumentResponse::try_from(value)?)?)
-    }
-}
+nested_enum_instances!(ProviderRequest, DocumentRequest, CreateRequest);
+nested_enum_instances!(ProviderRequest, DocumentRequest, DeleteRequest);
+nested_enum_instances!(ProviderResponse, DocumentResponse, CreateResponse);
+nested_enum_instances!(ProviderResponse, DocumentResponse, DeleteProgress);
 
 /// Delete a document
 #[derive(Debug, Serialize, Deserialize)]
