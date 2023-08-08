@@ -26,7 +26,6 @@ use iroh_bytes::{Hash, IROH_BLOCK_SIZE};
 use iroh_io::{AsyncSliceReader, AsyncSliceWriter, File};
 use rand::Rng;
 use range_collections::RangeSet2;
-use tokio::sync::mpsc;
 use tracing::trace_span;
 
 use super::flatten_to_io;
@@ -477,7 +476,10 @@ impl ReadonlyStore for Store {
         unimplemented!()
     }
 
-    fn validate(&self, _tx: mpsc::Sender<ValidateProgress>) -> BoxFuture<'_, anyhow::Result<()>> {
+    fn validate(
+        &self,
+        _sender: impl ProgressSender<Msg = ValidateProgress> + IdGenerator,
+    ) -> BoxFuture<'_, anyhow::Result<()>> {
         unimplemented!()
     }
 

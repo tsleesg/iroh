@@ -29,7 +29,6 @@ use iroh_bytes::{
     Hash, IROH_BLOCK_SIZE,
 };
 use range_collections::RangeSet2;
-use tokio::sync::mpsc;
 
 use super::flatten_to_io;
 
@@ -217,7 +216,7 @@ impl ReadonlyStore for Store {
 
     fn validate(
         &self,
-        _tx: mpsc::Sender<ValidateProgress>,
+        _sender: impl ProgressSender<Msg = ValidateProgress> + IdGenerator,
     ) -> BoxFuture<'static, anyhow::Result<()>> {
         future::ok(()).boxed()
     }

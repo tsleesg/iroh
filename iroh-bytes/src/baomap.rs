@@ -14,7 +14,6 @@ use futures::future::BoxFuture;
 use iroh_io::AsyncSliceReader;
 use range_collections::RangeSet2;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 /// An entry for one hash in a bao collection
 ///
@@ -102,7 +101,10 @@ pub trait ReadonlyStore: Map {
     /// list all roots (collections or other explicitly added things) in the database
     fn roots(&self) -> Box<dyn Iterator<Item = Hash> + Send + Sync + 'static>;
     /// Validate the database
-    fn validate(&self, tx: mpsc::Sender<ValidateProgress>) -> BoxFuture<'_, anyhow::Result<()>>;
+    fn validate(
+        &self,
+        sender: impl ProgressSender<Msg = ValidateProgress> + IdGenerator,
+    ) -> BoxFuture<'_, anyhow::Result<()>>;
 
     /// list partial blobs in the database
     fn partial_blobs(&self) -> Box<dyn Iterator<Item = Hash> + Send + Sync + 'static>;

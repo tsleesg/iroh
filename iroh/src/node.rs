@@ -729,9 +729,10 @@ impl<D: Store, C: CollectionParser> RpcHandler<D, C> {
         let (tx, rx) = mpsc::channel(1);
         let tx2 = tx.clone();
         let db = self.inner.db.clone();
+        let sender = TokioProgressSender::new(tx2);
         self.rt().main().spawn(async move {
-            if let Err(e) = db.validate(tx).await {
-                tx2.send(ValidateProgress::Abort(e.into())).await.unwrap();
+            if let Err(e) = db.validate(sender.clone()).await {
+                sender.send(ValidateProgress::Abort(e.into())).await.ok();
             }
         });
         tokio_stream::wrappers::ReceiverStream::new(rx)
