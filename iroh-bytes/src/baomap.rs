@@ -154,33 +154,57 @@ pub trait Store: ReadonlyStore + PartialMap {
 ///
 /// An import operation involves computing the outboard of a file, and then
 /// either copying or moving the file into the database.
-#[allow(missing_docs)]
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum ImportProgress {
     /// Found a path
     ///
     /// This will be the first message for an id
-    Found { id: u64, path: PathBuf },
+    Found {
+        /// The unique id of the entry.
+        id: u64,
+        /// The path from which the file will be imported.
+        path: PathBuf,
+    },
     /// Progress when copying the file to the store
     ///
     /// This will be omitted if the store can use the file in place
     ///
     /// There will be multiple of these messages for an id
-    CopyProgress { id: u64, offset: u64 },
+    CopyProgress {
+        /// The unique id of the entry.
+        id: u64,
+        /// The current offset of the copy progress, in bytes.
+        offset: u64,
+    },
     /// Determined the size
     ///
     /// This will come after `Found` and zero or more `CopyProgress` messages.
     /// For unstable files, determining the size will only be done once the file
     /// is fully copied.
-    Size { id: u64, size: u64 },
+    Size {
+        /// The unique id of the entry.
+        id: u64,
+        /// The size of the file.
+        size: u64,
+    },
     /// Progress when computing the outboard
     ///
     /// There will be multiple of these messages for an id
-    OutboardProgress { id: u64, offset: u64 },
+    OutboardProgress {
+        /// The unique id of the entry.
+        id: u64,
+        /// The current offset of the outboard computation, in bytes.
+        offset: u64,
+    },
     /// Done computing the outboard
     ///
     /// This comes after `Size` and zero or more `OutboardProgress` messages
-    OutboardDone { id: u64, hash: Hash },
+    OutboardDone {
+        /// The unique id of the entry.
+        id: u64,
+        /// The root hash that is generated during the outboard computation.
+        hash: Hash,
+    },
 }
 
 /// The import mode describes how files will be imported.
@@ -189,7 +213,7 @@ pub enum ImportProgress {
 /// does not make any sense. E.g. an in memory implementation will always have
 /// to copy the file into memory. Also, a disk based implementation might choose
 /// to copy small files even if the mode is `Reference`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ImportMode {
     /// This mode will copy the file into the database before hashing.
     ///
@@ -209,7 +233,7 @@ pub enum ImportMode {
 /// does not make any sense. E.g. an in memory implementation will always have
 /// to copy the file into memory. Also, a disk based implementation might choose
 /// to copy small files even if the mode is `Reference`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ExportMode {
     /// This mode will copy the file to the target directory.
     ///
@@ -223,28 +247,6 @@ pub enum ExportMode {
     /// This has a large performance and storage benefit, but it is less safe since
     /// the file might be modified in the target directory after it has been exported.
     Reference,
-}
-
-#[allow(missing_docs)]
-#[derive(Debug)]
-pub enum ExportProgress {
-    /// Starting to export to a file
-    ///
-    /// This will be the first message for an id
-    Start {
-        id: u64,
-        hash: Hash,
-        path: PathBuf,
-        stable: bool,
-    },
-    /// Progress when copying the file to the target
-    ///
-    /// This will be omitted if the store can move the file or use copy on write
-    ///
-    /// There will be multiple of these messages for an id
-    Progress { id: u64, offset: u64 },
-    /// Done exporting
-    Done { id: u64 },
 }
 
 /// Progress updates for the provide operation
