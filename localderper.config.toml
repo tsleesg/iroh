@@ -1,0 +1,17 @@
+[[derp_regions]]
+region_id = 1
+avoid = false
+region_code = "default"
+
+
+[[derp_regions.nodes]]
+name = "default-1"
+region_id = 1
+host_name = "localhost"
+url = "http://localhost:3340"
+stun_only = false
+stun_port = 1244
+ipv4 = { Some = "127.0.0.1" }
+ipv6 = { Some = "::1" }
+derp_port = 3340
+
