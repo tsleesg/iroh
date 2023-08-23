@@ -174,7 +174,7 @@ impl Clients {
 
     pub fn close_conn(&mut self, key: &PublicKey) {
         tracing::info!("closing conn {:?}", key);
-        if let Some(client) = dbg!(self.inner.remove(key)) {
+        if let Some(client) = self.inner.remove(key) {
             client.shutdown();
         }
     }
@@ -186,7 +186,7 @@ impl Clients {
         }
     }
 
-    pub fn all_clients(&mut self) -> impl Iterator<Item = &PublicKey> {
+    pub fn all_clients(&self) -> impl Iterator<Item = &PublicKey> {
         self.inner.keys()
     }
 
@@ -231,7 +231,7 @@ impl Clients {
     /// peer is gone from the network.
     pub fn unregister(&mut self, peer: &PublicKey) {
         tracing::trace!("unregistering client: {:?}", peer);
-        if let Some(client) = dbg!(self.inner.remove(peer)) {
+        if let Some(client) = self.inner.remove(peer) {
             // go impl `notePeerGoneFromRegion`
             for key in client.sent_to.iter() {
                 self.send_peer_gone(key, *peer);
@@ -264,6 +264,7 @@ impl Clients {
         if let Some(client) = self.inner.get(key) {
             let res = client.send_peer_gone(peer);
             let _ = self.process_result(key, res);
+            return;
         };
         tracing::warn!("Could not find client for {key:?}, dropping peer gone packet");
     }
@@ -272,8 +273,9 @@ impl Clients {
         if let Some(client) = self.inner.get(key) {
             let res = client.send_mesh_updates(updates);
             let _ = self.process_result(key, res);
+            return;
         };
-        tracing::warn!("Could not find client for {key:?}, dropping mesh update packet");
+        tracing::warn!("Could not find client for {key:?}, dropping mesh update packet",);
     }
 
     fn process_result(
