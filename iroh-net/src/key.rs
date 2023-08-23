@@ -29,7 +29,6 @@ pub struct PublicKey {
 impl Hash for PublicKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.public.hash(state);
-        dbg!(self, state.finish());
     }
 }
 
