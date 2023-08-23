@@ -192,6 +192,7 @@ impl Client {
             }
         };
 
+        tracing::trace!("frame: {:?}", frame);
         match frame {
             Frame::KeepAlive => {
                 // A one-way keep-alive message that doesn't require an ack.

@@ -404,7 +404,8 @@ impl ServerState {
             // servers will be down & unable to be reached
             // so we do not wait for all meshing to complete
             // back as successfull before running the server
-            let _ = mesh_clients.mesh().await?;
+            let setup = mesh_clients.mesh().await?;
+            futures::future::join_all(setup).await;
             Some(mesh_clients)
         } else {
             None
