@@ -163,10 +163,10 @@ impl Endpoint {
     /// Returns the address(es) that should be used for sending the next packet.
     /// Zero, one, or both of UDP address and DERP addr may be non-zero.
     fn addr_for_send(&mut self, now: &Instant) -> (Option<SocketAddr>, Option<u16>, bool) {
-        // if derp_only_mode() {
-        //     debug!("in `DEV_DERP_ONLY` mode, giving the DERP address as the only viable address for this endpoint");
-        //     return (None, self.derp_addr, false);
-        // }
+        if derp_only_mode() {
+            debug!("in `DEV_DERP_ONLY` mode, giving the DERP address as the only viable address for this endpoint");
+            return (None, self.derp_addr, false);
+        }
         match self.best_addr {
             Some(ref best_addr) => {
                 if !self.is_best_addr_valid(*now) {
@@ -451,14 +451,14 @@ impl Endpoint {
     }
 
     async fn send_pings(&mut self, now: Instant, send_call_me_maybe: bool) {
-        if derp_only_mode() {
-            // don't send or respond to any hole punching pings if we are in
-            // derp only mode
-            warn!(
-                "in `DEV_DERP_ONLY` mode, ignoring request to respond to a hole punching attempt."
-            );
-            return;
-        }
+        // if derp_only_mode() {
+        //     // don't send or respond to any hole punching pings if we are in
+        //     // derp only mode
+        //     warn!(
+        //         "in `DEV_DERP_ONLY` mode, ignoring request to respond to a hole punching attempt."
+        //     );
+        //     return;
+        // }
         self.last_full_ping.replace(now);
 
         // first cleanout out all old endpoints
