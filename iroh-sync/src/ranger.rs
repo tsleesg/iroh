@@ -41,6 +41,12 @@ impl<K> Range<K> {
     }
 }
 
+impl<K: Default> Range<K> {
+    pub fn all() -> Self {
+        Range::new(Default::default(), Default::default())
+    }
+}
+
 impl<K: Ord> Range<K> {
     pub fn is_all(&self) -> bool {
         self.x() == self.y()
@@ -53,11 +59,62 @@ impl<K: Ord> Range<K> {
             Ordering::Greater => self.x() <= t || t < self.y(),
         }
     }
+
+    pub fn as_std_range(
+        &self,
+    ) -> RangeParts<
+        std::ops::RangeFull,
+        std::ops::Range<&K>,
+        (std::ops::RangeFrom<&K>, std::ops::RangeTo<&K>),
+    > {
+        match self.x().cmp(self.y()) {
+            Ordering::Equal => RangeParts::All(std::ops::RangeFull),
+            Ordering::Less => RangeParts::Normal(self.x()..self.y()),
+            Ordering::Greater => RangeParts::WrapAround((self.x().., ..self.y())),
+        }
+    }
 }
 
 impl<K> From<(K, K)> for Range<K> {
     fn from((x, y): (K, K)) -> Self {
         Range { x, y }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum RangeParts<A, N, W> {
+    All(A),
+    Normal(N),
+    WrapAround(W),
+}
+
+pub type RangeIter<I> = RangeParts<I, I, (I, I)>;
+
+impl<I: Iterator> RangeIter<I> {
+
+    pub fn to_items_iter(self) -> RangeParts<I, I, std::iter::Chain<I, I>> {
+        match self {
+            RangeParts::All(a) => RangeParts::All(a),
+            RangeParts::Normal(n) => RangeParts::Normal(n),
+            RangeParts::WrapAround((a, b)) => RangeParts::WrapAround(a.chain(b)),
+        }
+    }
+}
+
+impl<A, B, C> Iterator for RangeParts<A, B, C>
+    where
+        A: Iterator,
+        B: Iterator<Item = A::Item>,
+        C: Iterator<Item = A::Item>,
+{
+    type Item = A::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            RangeParts::All(a) => a.next(),
+            RangeParts::Normal(n) => n.next(),
+            RangeParts::WrapAround(w) => w.next(),
+        }
     }
 }
 
