@@ -5,7 +5,7 @@ use std::{
     net::SocketAddr,
     num::NonZeroU16,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant}, str::FromStr,
 };
 
 use crate::config::{path_with_env, NodeConfig};
@@ -58,6 +58,34 @@ impl std::str::FromStr for SecretKeyOption {
     }
 }
 
+#[derive(derive_more::Display, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DerpModeArg {
+    /// Disable Derp servers completely.
+    Disabled,
+    /// Use the default Derp map, with Derp servers from n0.
+    Public,
+    /// Configure a local Derp server.
+    Local,
+}
+
+impl FromStr for DerpModeArg {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.to_ascii_lowercase();
+        let s = s.trim();
+        Ok(if s == "disabled" {
+            Self::Disabled
+        } else if s == "local" {
+            Self::Local
+        } else if s == "public" {
+            Self::Public
+        } else {
+            anyhow::bail!("invalid derp mode: {}", s)
+        })
+    }
+}
+
 #[derive(Subcommand, Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Commands {
@@ -85,9 +113,9 @@ pub enum Commands {
         #[clap(long)]
         iterations: Option<u64>,
 
-        /// Use a local derp relay
-        #[clap(long)]
-        local_derper: bool,
+        /// Configure which derp mode to use.
+        #[clap(long, default_value_t = DerpModeArg::Public)]
+        derp_mode: DerpModeArg,
     },
     /// Connect to an iroh doctor accept node.
     Connect {
@@ -102,19 +130,10 @@ pub enum Commands {
         #[clap(long, default_value_t = SecretKeyOption::Random)]
         secret_key: SecretKeyOption,
 
-        /// Use a local derp relay
-        ///
-        /// Overrides the `derp_region` field.
-        #[clap(long)]
-        local_derper: bool,
+        /// Configure which derp mode to use.
+        #[clap(long, default_value_t = DerpModeArg::Public)]
+        derp_mode: DerpModeArg,
 
-        /// The DERP region the peer you are dialing can be found on.
-        ///
-        /// If `local_derper` is true, this field is ignored.
-        ///
-        /// When `None`, or if attempting to dial an unknown region, no hole punching can occur.
-        ///
-        /// Default is `None`.
         #[clap(long)]
         derp_region: Option<u16>,
     },
@@ -560,13 +579,13 @@ const DR_DERP_ALPN: [u8; 11] = *b"n0/drderp/1";
 
 async fn make_endpoint(
     secret_key: SecretKey,
-    derp_map: Option<DerpMap>,
+    derp_mode: DerpMode,
 ) -> anyhow::Result<MagicEndpoint> {
     tracing::info!(
         "public key: {}",
         hex::encode(secret_key.public().as_bytes())
     );
-    tracing::info!("derp map {:#?}", derp_map);
+    tracing::info!("derp map {:#?}", derp_mode);
 
     let (on_derp_s, mut on_derp_r) = sync::mpsc::channel(8);
     let on_net_info = |ni: config::NetInfo| {
@@ -592,11 +611,8 @@ async fn make_endpoint(
         .transport_config(transport_config)
         .on_net_info(Box::new(on_net_info))
         .on_endpoints(Box::new(on_endpoints))
-        .on_derp_active(Box::new(on_derp_active));
-    let endpoint = match derp_map {
-        Some(derp_map) => endpoint.derp_mode(DerpMode::Custom(derp_map)),
-        None => endpoint,
-    };
+        .on_derp_active(Box::new(on_derp_active))
+        .derp_mode(derp_mode);
     let endpoint = endpoint.bind(0).await?;
 
     tokio::time::timeout(Duration::from_secs(10), on_derp_r.recv())
@@ -611,9 +627,9 @@ async fn connect(
     secret_key: SecretKey,
     direct_addresses: Vec<SocketAddr>,
     derp_region: Option<u16>,
-    derp_map: Option<DerpMap>,
+    derp_mode: DerpMode,
 ) -> anyhow::Result<()> {
-    let endpoint = make_endpoint(secret_key, derp_map).await?;
+    let endpoint = make_endpoint(secret_key, derp_mode).await?;
 
     tracing::info!("dialing {:?}", peer_id);
     let peer_addr = PeerAddr::from_parts(peer_id, derp_region, direct_addresses);
@@ -644,9 +660,9 @@ fn format_addr(addr: SocketAddr) -> String {
 async fn accept(
     secret_key: SecretKey,
     config: TestConfig,
-    derp_map: Option<DerpMap>,
+    derp_mode: DerpMode,
 ) -> anyhow::Result<()> {
-    let endpoint = make_endpoint(secret_key.clone(), derp_map).await?;
+    let endpoint = make_endpoint(secret_key.clone(), derp_mode).await?;
     let endpoints = endpoint.local_endpoints().await?;
     let remote_addrs = endpoints
         .iter()
@@ -933,32 +949,36 @@ pub async fn run(command: Commands, config: &NodeConfig) -> anyhow::Result<()> {
         Commands::Connect {
             dial,
             secret_key,
-            local_derper,
-            derp_region,
+            derp_mode,
             remote_endpoint,
+            derp_region,
         } => {
-            let (derp_map, derp_region) = if local_derper {
-                (Some(configure_local_derp_map()), Some(TEST_REGION_ID))
-            } else {
-                (config.derp_map()?, derp_region)
+            let (derp_mode, derp_region_override) = match derp_mode {
+                DerpModeArg::Local => (DerpMode::Custom(configure_local_derp_map()), Some(TEST_REGION_ID)),
+                DerpModeArg::Public => (DerpMode::Default, None),
+                DerpModeArg::Disabled => (DerpMode::Disabled, None),
             };
+            if derp_region.is_some() && derp_region_override.is_some() {
+                anyhow::bail!("derp region cannot be specified when using local derp mode");
+            }
+            let derp_region = derp_region.or(derp_region_override);
             let secret_key = create_secret_key(secret_key)?;
-            connect(dial, secret_key, remote_endpoint, derp_region, derp_map).await
+            connect(dial, secret_key, remote_endpoint, derp_region, derp_mode).await
         }
         Commands::Accept {
             secret_key,
-            local_derper,
+            derp_mode,
             size,
             iterations,
         } => {
-            let derp_map = if local_derper {
-                Some(configure_local_derp_map())
-            } else {
-                config.derp_map()?
+            let derp_mode = match derp_mode {
+                DerpModeArg::Local => DerpMode::Custom(configure_local_derp_map()),
+                DerpModeArg::Public => DerpMode::Default,
+                DerpModeArg::Disabled => DerpMode::Disabled,
             };
             let secret_key = create_secret_key(secret_key)?;
             let config = TestConfig { size, iterations };
-            accept(secret_key, config, derp_map).await
+            accept(secret_key, config, derp_mode).await
         }
         Commands::PortMap {
             protocol,
