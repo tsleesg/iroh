@@ -27,6 +27,9 @@ pub mod stun;
 pub mod tls;
 pub mod util;
 
+#[cfg(test)]
+mod tests;
+
 pub use magic_endpoint::{AddrInfo, MagicEndpoint, PeerAddr};
 
 #[cfg(test)]
