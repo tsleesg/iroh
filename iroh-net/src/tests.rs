@@ -25,25 +25,37 @@ async fn connect_by_peer_and_region() {
             direct_addresses: Default::default(),
         }
     };
-    let ep2 = make_ep().await.unwrap();
+    let n = 100;
     let accept = tokio::spawn(async move {
-        let conn = ep1.accept().await.unwrap().await?;
-        let (mut send, mut recv) = conn.accept_bi().await?;
-        let msg = recv.read_to_end(1024).await?;
-        send.write_all(&msg).await?;
-        send.finish().await?;
+        let mut msg = Vec::new();
+        for _ in 0..n {
+            let conn = ep1.accept().await.unwrap().await?;
+            let (mut send, mut recv) = conn.accept_bi().await?;
+            msg = recv.read_to_end(1024).await?;
+            send.write_all(&msg).await?;
+            send.finish().await?;
+        }
         anyhow::Ok(msg)
     });
-    let connect = tokio::spawn(async move {
-        let conn = ep2.connect(addr, ALPN).await.unwrap();
-        let (mut send, mut recv) = conn.open_bi().await?;
-        send.write_all(b"hello").await?;
-        send.finish().await?;
-        let msg = recv.read_to_end(1024).await?;
-        anyhow::Ok(msg)
-    });
+    for i in 0..n {
+        let ep2 = make_ep().await.unwrap();
+        let addr = addr.clone();
+        let msg = format!("hello {}", i);
+        println!("sending {}", msg);
+        let msg = msg.into_bytes();
+        let expected = msg.clone();
+        let connect = tokio::spawn(async move {
+            let conn = ep2.connect(addr, ALPN).await.unwrap();
+            let (mut send, mut recv) = conn.open_bi().await?;
+            send.write_all(&msg).await?;
+            send.finish().await?;
+            let msg = recv.read_to_end(1024).await?;
+            anyhow::Ok(msg)
+        });
+        let echoed = connect.await.unwrap().unwrap();
+        assert_eq!(echoed, expected);
+    }
     let received = accept.await.unwrap().unwrap();
-    let sent = connect.await.unwrap().unwrap();
-    assert_eq!(received, b"hello");
-    assert_eq!(sent, b"hello");
+    let expected = format!("hello {}", (n-1)).into_bytes();
+    assert_eq!(received, expected);
 }
