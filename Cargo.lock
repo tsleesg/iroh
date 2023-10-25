@@ -2274,6 +2274,7 @@ dependencies = [
  "duct",
  "ed25519-dalek",
  "flume 0.11.0",
+ "fnv",
  "futures",
  "governor",
  "hex",

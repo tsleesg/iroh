@@ -21,7 +21,7 @@
 use std::{
     collections::HashMap,
     fmt::Display,
-    io,
+    io::{self, IoSliceMut},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
     sync::{
@@ -29,11 +29,12 @@ use std::{
         Arc,
     },
     task::{ready, Context, Poll, Waker},
-    time::{Duration, Instant},
+    time::{Duration, Instant}, hash::{Hash, Hasher},
 };
 
 use anyhow::{Context as _, Result};
 use bytes::Bytes;
+use fnv::FnvHasher;
 use futures::{future::BoxFuture, FutureExt};
 use iroh_metrics::{inc, inc_by};
 use quinn::AsyncUdpSocket;
@@ -402,6 +403,7 @@ impl Inner {
                     }
                     match ready!(self.poll_send_udp(addr, &transmits, cx)) {
                         Ok(n) => {
+                            log_send("udp ", &transmits[..n]);
                             debug!(peer = %public_key.fmt_short(), dst = %addr, transmit_count=n, "sent transmits over UDP");
                             // truncate the transmits vec to `n`. these transmits will be sent to
                             // Derp further below. We only want to send those transmits to Derp that were
@@ -425,6 +427,7 @@ impl Inner {
                 // send derp
                 if let Some(derp_region) = derp_region {
                     self.send_derp(derp_region, public_key, split_packets(&transmits));
+                    log_send("derp", &transmits);
                     derp_sent = true;
                 }
 
@@ -506,13 +509,23 @@ impl Inner {
                     Poll::Pending | Poll::Ready(0) => {
                         return self.poll_recv_derp(cx, bufs, metas);
                     }
-                    Poll::Ready(n) => n,
+                    Poll::Ready(n) => {
+                        log_recv("udp6", &bufs[..n],&metas[..n]);
+                        n
+                    },
                 },
                 None => {
-                    return self.poll_recv_derp(cx, bufs, metas);
+                    let res = self.poll_recv_derp(cx, bufs, metas);
+                    if let Poll::Ready(Ok(n)) = &res {
+                        log_recv("derp", &bufs[..*n],&metas[..*n]);
+                    }
+                    return res;
                 }
             },
-            Poll::Ready(n) => n,
+            Poll::Ready(n) => {
+                log_recv("udp4", &bufs[..n],&metas[..n]);
+                n
+            },
         };
 
         let dst_ip = self.normalized_local_addr().ok().map(|addr| addr.ip());
@@ -2591,6 +2604,42 @@ fn disco_message_sent(msg: &disco::Message) {
         }
         disco::Message::CallMeMaybe(_) => {
             inc!(MagicsockMetrics, sent_disco_call_me_maybe);
+        }
+    }
+}
+
+fn fnv_hash<T: Hash>(value: T) -> String {
+    let mut hasher = FnvHasher::default();
+    value.hash(&mut hasher);
+    let hash_value = hasher.finish();
+
+    // Get the first 4 bytes and convert to hex
+    format!("{:08x}", (hash_value & 0xFFFFFFFF) as u32)
+}
+
+fn log_send(context: &str, transmits: &[quinn_udp::Transmit]) {
+    if tracing::level_enabled!(tracing::Level::INFO) {
+        if transmits.len() != 1 {
+            tracing::info!("{} send {} packets", context, transmits.len());
+        }
+        for transmit in transmits {
+            let contents = &transmit.contents;
+            let hash = fnv_hash(contents.as_ref());
+            tracing::info!("{} send to {}: {}, {} bytes", context, transmit.destination, hash, contents.len());
+        }
+    }
+}
+
+fn log_recv(context: &str, buffers: &[IoSliceMut], meta: &[quinn_udp::RecvMeta]) {
+    if tracing::level_enabled!(tracing::Level::INFO) {
+        let n = buffers.len().min(meta.len());
+        if n != 1 {
+            tracing::info!("{} recv {} packets", context, buffers.len());
+        }
+        for (buf, meta) in buffers.iter().zip(meta.iter()).take(n) {
+            let len = meta.len;
+            let hash = fnv_hash(&buf[..len]);
+            tracing::info!("{} recv from {}: {}, {} bytes", context, meta.addr, hash, len);
         }
     }
 }

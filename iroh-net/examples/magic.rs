@@ -88,7 +88,9 @@ async fn main() -> anyhow::Result<()> {
                     let message = format!("hi! you connected to {me}. bye bye");
                     send.write_all(message.as_bytes()).await?;
                     send.finish().await?;
-
+                    println!("sent response, closed stream to {peer_id}");
+                    drop(conn);
+                    println!("closed connection to {peer_id}");
                     Ok::<_, anyhow::Error>(())
                 });
             }
