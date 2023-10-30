@@ -484,12 +484,6 @@ async fn sync_subscribe_stop_close() -> Result<()> {
 async fn sync_big() -> Result<()> {
     setup_logging();
     let mut rng = test_rng(b"sync_big");
-    let rt = test_runtime();
-    let n_nodes = std::env::var("NODES")
-        .map(|v| v.parse().expect("NODES must be a number"))
-        .unwrap_or(10);
-    let n_entries_init = 1;
-
     let tick_task = tokio::task::spawn(async move {
         for i in 0.. {
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -497,110 +491,117 @@ async fn sync_big() -> Result<()> {
         }
     });
 
-    let nodes = spawn_nodes(rt, n_nodes, &mut rng).await?;
-    let peer_ids = nodes.iter().map(|node| node.peer_id()).collect::<Vec<_>>();
-    let clients = nodes.iter().map(|node| node.client()).collect::<Vec<_>>();
-    let authors = collect_futures(clients.iter().map(|c| c.authors.create())).await?;
+    for i in 0..100 {
+        let rt = test_runtime();
+        let n_nodes = std::env::var("NODES")
+            .map(|v| v.parse().expect("NODES must be a number"))
+            .unwrap_or(10);
+        let n_entries_init = 1;
 
-    let doc0 = clients[0].docs.create().await?;
-    let mut ticket = doc0.share(ShareMode::Write).await?;
-    // do not join for now, just import without any peer info
-    let peer0 = ticket.nodes[0].clone();
-    ticket.nodes = vec![];
+        let nodes = spawn_nodes(rt, n_nodes, &mut rng).await?;
+        let peer_ids = nodes.iter().map(|node| node.peer_id()).collect::<Vec<_>>();
+        let clients = nodes.iter().map(|node| node.client()).collect::<Vec<_>>();
+        let authors = collect_futures(clients.iter().map(|c| c.authors.create())).await?;
 
-    let mut docs = vec![];
-    docs.push(doc0);
-    docs.extend_from_slice(
-        &collect_futures(
-            clients
+        let doc0 = clients[0].docs.create().await?;
+        let mut ticket = doc0.share(ShareMode::Write).await?;
+        // do not join for now, just import without any peer info
+        let peer0 = ticket.nodes[0].clone();
+        ticket.nodes = vec![];
+
+        let mut docs = vec![];
+        docs.push(doc0);
+        docs.extend_from_slice(
+            &collect_futures(
+                clients
+                    .iter()
+                    .skip(1)
+                    .map(|c| c.docs.import(ticket.clone())),
+            )
+            .await?,
+        );
+
+        let mut expected = vec![];
+
+        // create initial data on each node
+        info!("publishing initial docs");
+        publish(&docs, &mut expected, n_entries_init, |i, j| {
+            (
+                authors[i],
+                format!("init/{}/{j}", peer_ids[i].fmt_short()),
+                format!("init:{i}:{j}"),
+            )
+        })
+        .await?;
+
+        // assert initial data
+        for (i, doc) in docs.iter().enumerate() {
+            let entries = get_all_with_content(doc).await?;
+            let mut expected = expected
                 .iter()
-                .skip(1)
-                .map(|c| c.docs.import(ticket.clone())),
-        )
-        .await?,
-    );
-
-    let mut expected = vec![];
-
-    // create initial data on each node
-    info!("publishing initial docs");
-    publish(&docs, &mut expected, n_entries_init, |i, j| {
-        (
-            authors[i],
-            format!("init/{}/{j}", peer_ids[i].fmt_short()),
-            format!("init:{i}:{j}"),
-        )
-    })
-    .await?;
-
-    // assert initial data
-    for (i, doc) in docs.iter().enumerate() {
-        let entries = get_all_with_content(doc).await?;
-        let mut expected = expected
-            .iter()
-            .filter(|e| e.author == authors[i])
-            .cloned()
-            .collect::<Vec<_>>();
-        expected.sort();
-        assert_eq!(entries, expected, "phase1 pre-sync correct");
-    }
-
-    // setup event streams
-    info!("setup event streams");
-    let events = collect_futures(docs.iter().map(|d| d.subscribe())).await?;
-
-    // join nodes together
-    info!("joining nodes");
-    for (i, doc) in docs.iter().enumerate().skip(1) {
-        info!(me = %peer_ids[i].fmt_short(), peer = %peer0.peer_id.fmt_short(), "join");
-        doc.start_sync(vec![peer0.clone()]).await?;
-    }
-
-    // wait for InsertRemote events stuff to happen
-    info!("wait for all peers to receive insert events");
-    let expected_inserts = (n_nodes - 1) * n_entries_init;
-    let mut tasks = tokio::task::JoinSet::default();
-    for (i, events) in events.into_iter().enumerate() {
-        let doc = docs[i].clone();
-        let me = doc.id().fmt_short();
-        let expected = expected.clone();
-        let fut = async move {
-            wait_for_events(events, expected_inserts, TIMEOUT, |e| {
-                matches!(e, LiveEvent::InsertRemote { .. })
-            })
-            .await?;
-            let entries = get_all(&doc).await?;
-            if entries != expected {
-                Err(anyhow!(
-                    "node {i} failed (has {} entries but expected to have {})",
-                    entries.len(),
-                    expected.len()
-                ))
-            } else {
-                info!(
-                    "received and checked all {} expected entries",
-                    expected.len()
-                );
-                Ok(())
-            }
+                .filter(|e| e.author == authors[i])
+                .cloned()
+                .collect::<Vec<_>>();
+            expected.sort();
+            assert_eq!(entries, expected, "phase1 pre-sync correct");
         }
-        .instrument(error_span!("sync-test", %me));
-        let fut = fut.map(move |r| r.with_context(move || format!("node {i} ({me})")));
-        tasks.spawn(fut);
+
+        // setup event streams
+        info!("setup event streams");
+        let events = collect_futures(docs.iter().map(|d| d.subscribe())).await?;
+
+        // join nodes together
+        info!("joining nodes");
+        for (i, doc) in docs.iter().enumerate().skip(1) {
+            info!(me = %peer_ids[i].fmt_short(), peer = %peer0.peer_id.fmt_short(), "join");
+            doc.start_sync(vec![peer0.clone()]).await?;
+        }
+
+        // wait for InsertRemote events stuff to happen
+        info!("wait for all peers to receive insert events");
+        let expected_inserts = (n_nodes - 1) * n_entries_init;
+        let mut tasks = tokio::task::JoinSet::default();
+        for (i, events) in events.into_iter().enumerate() {
+            let doc = docs[i].clone();
+            let me = doc.id().fmt_short();
+            let expected = expected.clone();
+            let fut = async move {
+                wait_for_events(events, expected_inserts, TIMEOUT, |e| {
+                    matches!(e, LiveEvent::InsertRemote { .. })
+                })
+                .await?;
+                let entries = get_all(&doc).await?;
+                if entries != expected {
+                    Err(anyhow!(
+                        "node {i} failed (has {} entries but expected to have {})",
+                        entries.len(),
+                        expected.len()
+                    ))
+                } else {
+                    info!(
+                        "received and checked all {} expected entries",
+                        expected.len()
+                    );
+                    Ok(())
+                }
+            }
+            .instrument(error_span!("sync-test", %me));
+            let fut = fut.map(move |r| r.with_context(move || format!("node {i} ({me})")));
+            tasks.spawn(fut);
+        }
+
+        while let Some(res) = tasks.join_next().await {
+            res??;
+        }
+
+        assert_all_docs(&docs, &peer_ids, &expected, "after initial sync").await;
+
+        info!("shutdown");
+        for (i, node) in nodes.into_iter().enumerate() {
+            info!("shutting down node {i}");
+            node.shutdown();
+        }
     }
-
-    while let Some(res) = tasks.join_next().await {
-        res??;
-    }
-
-    assert_all_docs(&docs, &peer_ids, &expected, "after initial sync").await;
-
-    info!("shutdown");
-    for (i, node) in nodes.into_iter().enumerate() {
-        info!("shutting down node {i}");
-        node.shutdown();
-    }
-
     tick_task.abort();
 
     Ok(())
