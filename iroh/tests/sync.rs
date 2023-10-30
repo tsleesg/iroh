@@ -492,6 +492,7 @@ async fn sync_big() -> Result<()> {
     });
 
     for i in 0..100 {
+        tracing::warn!("START:ROUND {}", i + 1);
         let rt = test_runtime();
         let n_nodes = std::env::var("NODES")
             .map(|v| v.parse().expect("NODES must be a number"))
@@ -601,6 +602,8 @@ async fn sync_big() -> Result<()> {
             info!("shutting down node {i}");
             node.shutdown();
         }
+
+        tracing::warn!("START:ROUND {}", i + 1);
     }
     tick_task.abort();
 
