@@ -71,6 +71,7 @@ async fn spawn_nodes(
     n: usize,
     mut rng: &mut (impl CryptoRng + Rng),
 ) -> anyhow::Result<Vec<Node<iroh_bytes::store::mem::Store>>> {
+    info!("spawning {n} nodes");
     let mut futs = vec![];
     for i in 0..n {
         futs.push(spawn_node(rt.clone(), i, &mut rng));
@@ -489,7 +490,7 @@ async fn sync_big() -> Result<()> {
         .unwrap_or(10);
     let n_entries_init = 1;
 
-    tokio::task::spawn(async move {
+    let tick_task = tokio::task::spawn(async move {
         for i in 0.. {
             tokio::time::sleep(Duration::from_secs(1)).await;
             info!("tick {i}");
@@ -522,6 +523,7 @@ async fn sync_big() -> Result<()> {
     let mut expected = vec![];
 
     // create initial data on each node
+    info!("publishing initial docs");
     publish(&docs, &mut expected, n_entries_init, |i, j| {
         (
             authors[i],
@@ -544,9 +546,11 @@ async fn sync_big() -> Result<()> {
     }
 
     // setup event streams
+    info!("setup event streams");
     let events = collect_futures(docs.iter().map(|d| d.subscribe())).await?;
 
     // join nodes together
+    info!("joining nodes");
     for (i, doc) in docs.iter().enumerate().skip(1) {
         info!(me = %peer_ids[i].fmt_short(), peer = %peer0.peer_id.fmt_short(), "join");
         doc.start_sync(vec![peer0.clone()]).await?;
@@ -592,9 +596,12 @@ async fn sync_big() -> Result<()> {
     assert_all_docs(&docs, &peer_ids, &expected, "after initial sync").await;
 
     info!("shutdown");
-    for node in nodes {
+    for (i, node) in nodes.into_iter().enumerate() {
+        info!("shutting down node {i}");
         node.shutdown();
     }
+
+    tick_task.abort();
 
     Ok(())
 }
