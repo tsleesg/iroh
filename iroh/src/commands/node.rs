@@ -81,7 +81,7 @@ pub async fn run(rt: &runtime::Handle, opts: StartOptions, add_opts: BlobAddOpti
     Ok(())
 }
 
-async fn start_daemon_node(
+pub async fn start_daemon_node(
     rt: &runtime::Handle,
     opts: StartOptions,
 ) -> Result<Node<iroh_bytes::store::flat::Store>> {

@@ -2607,6 +2607,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "miroh"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "iroh",
+ "num_cpus",
+ "quic-rpc",
+ "quinn",
+ "tokio",
+ "tokio-util",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "multibase"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
