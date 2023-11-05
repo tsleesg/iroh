@@ -85,7 +85,8 @@ where
 /// Iroh node client.
 #[derive(Debug, Clone)]
 pub struct NodeClient<C> {
-    rpc: RpcClient<ProviderService, C>,
+    /// Internal rpc client.
+    pub rpc: RpcClient<ProviderService, C>,
 }
 
 impl<C> NodeClient<C>

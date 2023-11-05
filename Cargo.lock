@@ -2612,12 +2612,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "derive_more",
  "iroh",
  "num_cpus",
  "quic-rpc",
  "quinn",
+ "serde",
+ "strum",
  "tokio",
  "tokio-util",
+ "tracing",
  "tracing-subscriber",
 ]
 

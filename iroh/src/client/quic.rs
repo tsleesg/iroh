@@ -52,7 +52,9 @@ pub async fn connect_raw(rpc_port: u16) -> anyhow::Result<RpcClient> {
         .context("Iroh node is not running")??;
     Ok(client)
 }
-fn create_quinn_client(
+
+/// Creates a simple quinn client.
+pub fn create_quinn_client(
     bind_addr: SocketAddr,
     alpn_protocols: Vec<Vec<u8>>,
     keylog: bool,

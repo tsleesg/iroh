@@ -50,7 +50,7 @@ pub enum SetTagOption {
 /// A request to the node to provide the data at the given path
 ///
 /// Will produce a stream of [`AddProgress`] messages.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlobAddPathRequest {
     /// The path to the data to provide.
     ///
@@ -68,7 +68,7 @@ pub struct BlobAddPathRequest {
 }
 
 /// Whether to wrap the added data in a collection.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum WrapOption {
     /// Do not wrap the file or directory.
     NoWrap,
@@ -138,7 +138,7 @@ impl ServerStreamingMsg<ProviderService> for BlobDownloadRequest {
 }
 
 /// A request to the node to validate the integrity of all provided data
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlobValidateRequest {
     /// If true, remove invalid data
     pub repair: bool,
@@ -153,7 +153,7 @@ impl ServerStreamingMsg<ProviderService> for BlobValidateRequest {
 }
 
 /// List all blobs, including collections
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlobListRequest;
 
 /// A response to a list blobs request
@@ -176,7 +176,7 @@ impl ServerStreamingMsg<ProviderService> for BlobListRequest {
 }
 
 /// List all blobs, including collections
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlobListIncompleteRequest;
 
 /// A response to a list blobs request
@@ -201,7 +201,7 @@ impl ServerStreamingMsg<ProviderService> for BlobListIncompleteRequest {
 /// List all collections
 ///
 /// Lists all collections that have been explicitly added to the database.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlobListCollectionsRequest;
 
 /// A response to a list collections request
@@ -233,7 +233,7 @@ impl ServerStreamingMsg<ProviderService> for BlobListCollectionsRequest {
 /// List all collections
 ///
 /// Lists all collections that have been explicitly added to the database.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ListTagsRequest;
 
 /// A response to a list collections request
@@ -256,7 +256,7 @@ impl ServerStreamingMsg<ProviderService> for ListTagsRequest {
 }
 
 /// Delete a blob
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlobDeleteBlobRequest {
     /// Name of the tag
     pub hash: Hash,
@@ -267,7 +267,7 @@ impl RpcMsg<ProviderService> for BlobDeleteBlobRequest {
 }
 
 /// Delete a tag
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DeleteTagRequest {
     /// Name of the tag
     pub name: Tag,
@@ -281,7 +281,7 @@ impl RpcMsg<ProviderService> for DeleteTagRequest {
 ///
 /// These can be nodes that we have explicitly connected to or nodes
 /// that have initiated connections to us.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NodeConnectionsRequest;
 
 /// A response to a connections request
@@ -318,7 +318,7 @@ impl RpcMsg<ProviderService> for NodeConnectionInfoRequest {
 }
 
 /// A request to shutdown the node
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NodeShutdownRequest {
     /// Force shutdown
     pub force: bool,
@@ -331,7 +331,7 @@ impl RpcMsg<ProviderService> for NodeShutdownRequest {
 /// A request to get information about the identity of the node
 ///
 /// See [`NodeStatusResponse`] for the response.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NodeStatusRequest;
 
 impl RpcMsg<ProviderService> for NodeStatusRequest {
@@ -350,7 +350,7 @@ pub struct NodeStatusResponse {
 }
 
 /// A request to watch for the node status
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NodeWatchRequest;
 
 impl Msg<ProviderService> for NodeWatchRequest {
@@ -378,7 +378,7 @@ pub struct VersionResponse {
 // author
 
 /// List document authors for which we have a secret key.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AuthorListRequest {}
 
 impl Msg<ProviderService> for AuthorListRequest {
@@ -397,7 +397,7 @@ pub struct AuthorListResponse {
 }
 
 /// Create a new document author.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AuthorCreateRequest;
 
 impl RpcMsg<ProviderService> for AuthorCreateRequest {
@@ -412,7 +412,7 @@ pub struct AuthorCreateResponse {
 }
 
 /// Import author from secret key
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AuthorImportRequest {
     /// The secret key for the author
     pub key: KeyBytes,
@@ -440,7 +440,7 @@ pub enum ShareMode {
 }
 
 /// Subscribe to events for a document.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocSubscribeRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -462,7 +462,7 @@ pub struct DocSubscribeResponse {
 }
 
 /// List all documents
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocListRequest {}
 
 impl Msg<ProviderService> for DocListRequest {
@@ -481,7 +481,7 @@ pub struct DocListResponse {
 }
 
 /// Create a new document
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocCreateRequest {}
 
 impl RpcMsg<ProviderService> for DocCreateRequest {
@@ -496,7 +496,7 @@ pub struct DocCreateResponse {
 }
 
 /// Import a document from a ticket.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocImportRequest(pub DocTicket);
 
 impl RpcMsg<ProviderService> for DocImportRequest {
@@ -511,7 +511,7 @@ pub struct DocImportResponse {
 }
 
 /// Share a document with peers over a ticket.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocShareRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -528,7 +528,7 @@ impl RpcMsg<ProviderService> for DocShareRequest {
 pub struct DocShareResponse(pub DocTicket);
 
 /// Get info on a document
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocStatusRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -547,7 +547,7 @@ pub struct DocStatusResponse {
 }
 
 /// Open a document
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocOpenRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -562,7 +562,7 @@ impl RpcMsg<ProviderService> for DocOpenRequest {
 pub struct DocOpenResponse {}
 
 /// Open a document
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocCloseRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -573,11 +573,11 @@ impl RpcMsg<ProviderService> for DocCloseRequest {
 }
 
 /// Response to [`DocCloseRequest`]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocCloseResponse {}
 
 /// Start to sync a doc with peers.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocStartSyncRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -594,7 +594,7 @@ impl RpcMsg<ProviderService> for DocStartSyncRequest {
 pub struct DocStartSyncResponse {}
 
 /// Stop the live sync for a doc, and optionally delete the document.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocLeaveRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -609,7 +609,7 @@ impl RpcMsg<ProviderService> for DocLeaveRequest {
 pub struct DocLeaveResponse {}
 
 /// Stop the live sync for a doc, and optionally delete the document.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocDropRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -624,7 +624,7 @@ impl RpcMsg<ProviderService> for DocDropRequest {
 pub struct DocDropResponse {}
 
 /// Set an entry in a document
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocSetRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -650,7 +650,7 @@ pub struct DocSetResponse {
 }
 
 /// Delete entries in a document
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocDelRequest {
     /// The document id.
     pub doc_id: NamespaceId,
@@ -672,7 +672,7 @@ pub struct DocDelResponse {
 }
 
 /// Set an entry in a document via its hash
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocSetHashRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -695,7 +695,7 @@ impl RpcMsg<ProviderService> for DocSetHashRequest {
 pub struct DocSetHashResponse {}
 
 /// Get entries from a document
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocGetManyRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -719,7 +719,7 @@ pub struct DocGetManyResponse {
 }
 
 /// Get entries from a document
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocGetOneRequest {
     /// The document id
     pub doc_id: NamespaceId,
@@ -741,7 +741,7 @@ pub struct DocGetOneResponse {
 }
 
 /// Get the bytes for a hash
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BlobReadRequest {
     /// Hash to get bytes for
     pub hash: Hash,
@@ -756,7 +756,7 @@ impl ServerStreamingMsg<ProviderService> for BlobReadRequest {
 }
 
 /// Response to [`BlobReadRequest`]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum BlobReadResponse {
     /// The entry header.
     Entry {
@@ -773,14 +773,14 @@ pub enum BlobReadResponse {
 }
 
 /// Write a blob from a byte stream
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BlobAddStreamRequest {
     /// Tag to tag the data with.
     pub tag: SetTagOption,
 }
 
 /// Write a blob from a byte stream
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum BlobAddStreamUpdate {
     /// A chunk of stream data
     Chunk(Bytes),
@@ -802,7 +802,7 @@ impl BidiStreamingMsg<ProviderService> for BlobAddStreamRequest {
 pub struct BlobAddStreamResponse(pub AddProgress);
 
 /// Get stats for the running Iroh node
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NodeStatsRequest {}
 
 impl RpcMsg<ProviderService> for NodeStatsRequest {
@@ -831,7 +831,7 @@ pub struct ProviderService;
 
 /// The request enum, listing all possible requests.
 #[allow(missing_docs)]
-#[derive(strum::Display, Debug, Serialize, Deserialize, From, TryInto)]
+#[derive(strum::Display, Debug, Serialize, Deserialize, From, TryInto, Clone)]
 pub enum ProviderRequest {
     NodeStatus(NodeStatusRequest),
     NodeStats(NodeStatsRequest),

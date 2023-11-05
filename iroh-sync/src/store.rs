@@ -173,7 +173,7 @@ pub trait Store: std::fmt::Debug + Clone + Send + Sync + 'static {
 }
 
 /// Filter a get query onto a namespace
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum GetFilter {
     /// No filter, list all entries
     All,
