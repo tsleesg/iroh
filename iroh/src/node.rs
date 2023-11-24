@@ -1280,12 +1280,11 @@ impl<D: BaoStore> RpcHandler<D> {
                 .buffered(IO_PARALLELISM)
                 .try_collect::<Vec<_>>()
                 .await?;
-            let total_blobs_size = result.iter().map(|(_, size, _)| *size).sum();
 
             // create a collection
             let (blobs, _child_tags): (Vec<_>, Vec<_>) =
                 result.into_iter().map(|(blob, _, tag)| (blob, tag)).unzip();
-            let collection = Collection::new(blobs, total_blobs_size)?;
+            let collection = Collection::new(blobs)?;
 
             collection.store(&self.inner.db).await?
         } else {

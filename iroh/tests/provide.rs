@@ -152,7 +152,6 @@ async fn multiple_clients() -> Result<()> {
             name: expect_name.clone(),
             hash: expect_hash,
         }],
-        0,
     )?;
     let hash = db.insert_many(collection.to_blobs()).unwrap();
     let rt = test_runtime();
@@ -218,7 +217,6 @@ where
 
     let (mut mdb, lookup) = iroh_bytes::store::readonly_mem::Store::new(file_opts.clone());
     let mut blobs = Vec::new();
-    let mut total_blobs_size = 0u64;
 
     for opt in file_opts.into_iter() {
         let (name, data) = opt;
@@ -234,12 +232,11 @@ where
             hash,
         };
         blobs.push(blob);
-        total_blobs_size += data.len() as u64;
 
         // keep track of expected values
         expects.push((name, path, hash));
     }
-    let collection = Collection::new(blobs, total_blobs_size)?;
+    let collection = Collection::new(blobs)?;
     let collection_hash = mdb.insert_many(collection.to_blobs()).unwrap();
 
     // sort expects by name to match the canonical order of blobs
@@ -346,7 +343,6 @@ async fn test_server_close() {
             name: "hello".to_string(),
             hash: child_hash,
         }],
-        0,
     )
     .unwrap();
     let hash = db.insert_many(collection.to_blobs()).unwrap();
@@ -409,7 +405,6 @@ fn create_test_db(
                 hash: hash.into(),
             })
             .collect(),
-        0,
     )
     .unwrap();
     let hash = db.insert_many(collection.to_blobs()).unwrap();

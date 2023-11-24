@@ -20,15 +20,12 @@ use serde::{Deserialize, Serialize};
 pub struct Collection {
     /// Links to the blobs in this collection
     pub(crate) blobs: Vec<Blob>,
-    /// The total size of the raw_data referred to by all links
-    pub(crate) total_blobs_size: u64,
 }
 
 /// Metadata for a collection
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 struct CollectionMeta {
     names: Vec<String>,
-    total_blobs_size: u64,
 }
 
 impl Collection {
@@ -40,7 +37,6 @@ impl Collection {
     pub fn to_blobs(&self) -> impl Iterator<Item = Bytes> {
         let meta = CollectionMeta {
             names: self.names(),
-            total_blobs_size: self.total_blobs_size(),
         };
         let meta_bytes = postcard::to_stdvec(&meta).unwrap();
         let meta_bytes_hash = blake3::hash(&meta_bytes).into();
@@ -159,7 +155,6 @@ impl Collection {
         }
         let meta = CollectionMeta {
             names,
-            total_blobs_size: self.total_blobs_size,
         };
         (links, meta)
     }
@@ -174,11 +169,11 @@ impl Collection {
             .zip(meta.names)
             .map(|(hash, name)| Blob { name, hash })
             .collect();
-        Self::new(blobs, meta.total_blobs_size)
+        Self::new(blobs)
     }
 
     /// Create a new collection from a list of blobs and total size of the raw data
-    pub fn new(blobs: Vec<Blob>, total_blobs_size: u64) -> anyhow::Result<Self> {
+    pub fn new(blobs: Vec<Blob>) -> anyhow::Result<Self> {
         let mut blobs = blobs;
         let n = blobs.len();
         blobs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -186,7 +181,6 @@ impl Collection {
         anyhow::ensure!(n == blobs.len(), "duplicate blob names");
         Ok(Self {
             blobs,
-            total_blobs_size,
         })
     }
 
@@ -208,11 +202,6 @@ impl Collection {
     /// Take ownership of the blobs in this collection
     pub fn into_inner(self) -> Vec<Blob> {
         self.blobs
-    }
-
-    /// Total size of the raw data referred to by all blobs in this collection
-    pub fn total_blobs_size(&self) -> u64 {
-        self.total_blobs_size
     }
 
     /// The number of blobs in this collection
@@ -250,5 +239,20 @@ mod tests {
         postcard::to_slice(&b, &mut buf).unwrap();
         let deserialize_b: Blob = postcard::from_bytes(&buf).unwrap();
         assert_eq!(b, deserialize_b);
+    }
+
+    #[test]
+    fn roundtrip_collection_meta() {
+        let expected = CollectionMeta {
+            names: vec![
+                "test".to_string(),
+                "a".to_string(),
+                "b".to_string(),
+            ],
+        };
+        let mut buf = bytes::BytesMut::zeroed(1024);
+        postcard::to_slice(&expected, &mut buf).unwrap();
+        let actual: CollectionMeta = postcard::from_bytes(&buf).unwrap();
+        assert_eq!(expected, actual);
     }
 }
