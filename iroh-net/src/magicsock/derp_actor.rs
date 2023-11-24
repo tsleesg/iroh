@@ -546,7 +546,7 @@ impl DerpActor {
     /// Closes the DERP connection to the provided `url` and starts reconnecting it if it's
     /// our current home DERP.
     async fn close_or_reconnect_derp(&mut self, url: &Url, why: &'static str) {
-        self.close_derp(&url, why).await;
+        self.close_derp(url, why).await;
         if self.conn.my_derp().as_ref() == Some(url) {
             self.connect_derp(url, None).await;
         }
@@ -606,7 +606,7 @@ impl DerpActor {
     }
 
     async fn close_derp(&mut self, url: &Url, why: &'static str) {
-        if let Some((s, t)) = self.active_derp.remove(&url) {
+        if let Some((s, t)) = self.active_derp.remove(url) {
             debug!(%url, "closing connection: {}", why);
 
             s.send(ActiveDerpMessage::Shutdown).await.ok();
