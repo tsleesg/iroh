@@ -19,7 +19,44 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Collection {
     /// Links to the blobs in this collection
-    pub(crate) blobs: Vec<Blob>,
+    pub(crate) blobs: Vec<(String, Hash)>,
+}
+
+impl std::ops::Index<usize> for Collection {
+    type Output = (String, Hash);
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.blobs[index]
+    }
+}
+
+impl Default for Collection {
+    fn default() -> Self {
+        Self { blobs: Vec::new() }
+    }
+}
+
+impl<K, V> Extend<(K, V)> for Collection
+where
+    K: Into<String>,
+    V: Into<Hash>,
+{
+    fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
+        self.blobs
+            .extend(iter.into_iter().map(|(k, v)| (k.into(), v.into())));
+    }
+}
+
+impl<K, V> FromIterator<(K, V)> for Collection
+where
+    K: Into<String>,
+    V: Into<Hash>,
+{
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        let mut res = Self::default();
+        res.extend(iter);
+        res
+    }
 }
 
 /// Metadata for a collection
@@ -69,7 +106,7 @@ impl Collection {
             let curr = at_meta.next(meta_link);
             let (curr, names) = curr.concatenate_into_vec().await?;
             let names = postcard::from_bytes::<CollectionMeta>(&names)?;
-            let collection = Collection::from_parts(children, names)?;
+            let collection = Collection::from_parts(children, names);
             (curr.next(), collection)
         };
         Ok((next, links, collection))
@@ -124,7 +161,7 @@ impl Collection {
             meta.names.len() == links.len(),
             "names and links length mismatch"
         );
-        Self::from_parts(links, meta)
+        Ok(Self::from_parts(links, meta))
     }
 
     /// Store a collection in a store. returns the root hash of the collection
@@ -147,76 +184,45 @@ impl Collection {
 
     /// Split a collection into a sequence of links and metadata
     fn into_parts(self) -> (Vec<Hash>, CollectionMeta) {
-        let mut names = Vec::with_capacity(self.blobs().len());
-        let mut links = Vec::with_capacity(self.blobs().len());
-        for blob in self.blobs {
-            names.push(blob.name);
-            links.push(blob.hash);
+        let mut names = Vec::with_capacity(self.blobs.len());
+        let mut links = Vec::with_capacity(self.blobs.len());
+        for (name, hash) in self.blobs {
+            names.push(name);
+            links.push(hash);
         }
-        let meta = CollectionMeta {
-            names,
-        };
+        let meta = CollectionMeta { names };
         (links, meta)
     }
 
     /// Create a new collection from a list of hashes and metadata
-    fn from_parts(
-        links: impl IntoIterator<Item = Hash>,
-        meta: CollectionMeta,
-    ) -> anyhow::Result<Self> {
-        let blobs = links
-            .into_iter()
-            .zip(meta.names)
-            .map(|(hash, name)| Blob { name, hash })
-            .collect();
-        Self::new(blobs)
-    }
-
-    /// Create a new collection from a list of blobs and total size of the raw data
-    pub fn new(blobs: Vec<Blob>) -> anyhow::Result<Self> {
-        let mut blobs = blobs;
-        let n = blobs.len();
-        blobs.sort_by(|a, b| a.name.cmp(&b.name));
-        blobs.dedup_by(|a, b| a.name == b.name);
-        anyhow::ensure!(n == blobs.len(), "duplicate blob names");
-        Ok(Self {
-            blobs,
-        })
+    fn from_parts(links: impl IntoIterator<Item = Hash>, meta: CollectionMeta) -> Self {
+        meta.names.into_iter().zip(links).collect()
     }
 
     /// Get the links to the blobs in this collection
     fn links(&self) -> impl Iterator<Item = Hash> + '_ {
-        self.blobs.iter().map(|x| x.hash)
+        self.blobs.iter().map(|(_name, hash)| *hash)
     }
 
     /// Get the names of the blobs in this collection
     fn names(&self) -> Vec<String> {
-        self.blobs.iter().map(|x| x.name.clone()).collect()
-    }
-
-    /// Blobs in this collection
-    pub fn blobs(&self) -> &[Blob] {
-        &self.blobs
+        self.blobs.iter().map(|(name, _)| name.clone()).collect()
     }
 
     /// Take ownership of the blobs in this collection
-    pub fn into_inner(self) -> Vec<Blob> {
-        self.blobs
+    pub fn into_iter(self) -> impl Iterator<Item = (String, Hash)> {
+        self.blobs.into_iter()
     }
 
-    /// The number of blobs in this collection
-    pub fn total_entries(&self) -> u64 {
-        self.blobs.len() as u64
+    /// Iterate over the blobs in this collection
+    pub fn iter(&self) -> impl Iterator<Item = &(String, Hash)> {
+        self.blobs.iter()
     }
-}
 
-/// A blob entry of a collection
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Blob {
-    /// The name of this blob of data
-    pub name: String,
-    /// The hash of the blob of data
-    pub hash: Hash,
+    /// Get the number of blobs in this collection
+    pub fn len(&self) -> usize {
+        self.blobs.len()
+    }
 }
 
 #[cfg(test)]
@@ -226,29 +232,25 @@ mod tests {
 
     #[test]
     fn roundtrip_blob() {
-        let b = Blob {
-            name: "test".to_string(),
-            hash: blake3::Hash::from_hex(
+        let b = (
+            "test".to_string(),
+            blake3::Hash::from_hex(
                 "3aa61c409fd7717c9d9c639202af2fae470c0ef669be7ba2caea5779cb534e9d",
             )
             .unwrap()
             .into(),
-        };
+        );
 
         let mut buf = bytes::BytesMut::zeroed(1024);
         postcard::to_slice(&b, &mut buf).unwrap();
-        let deserialize_b: Blob = postcard::from_bytes(&buf).unwrap();
+        let deserialize_b: (String, Hash) = postcard::from_bytes(&buf).unwrap();
         assert_eq!(b, deserialize_b);
     }
 
     #[test]
     fn roundtrip_collection_meta() {
         let expected = CollectionMeta {
-            names: vec![
-                "test".to_string(),
-                "a".to_string(),
-                "b".to_string(),
-            ],
+            names: vec!["test".to_string(), "a".to_string(), "b".to_string()],
         };
         let mut buf = bytes::BytesMut::zeroed(1024);
         postcard::to_slice(&expected, &mut buf).unwrap();

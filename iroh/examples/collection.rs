@@ -7,8 +7,8 @@
 //! run this example from the project root:
 //!     $ cargo run -p collection
 use iroh::bytes::util::runtime;
-use iroh::collection::{Blob, Collection};
-use iroh_bytes::BlobFormat;
+use iroh::collection::Collection;
+use iroh_bytes::{BlobFormat, Hash};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info
@@ -29,15 +29,11 @@ async fn main() -> anyhow::Result<()> {
         ("blob2", b"the second blob of bytes".to_vec()),
     ]);
     // create blobs from the data
-    let blobs = names
+    let collection: Collection = names
         .into_iter()
-        .map(|(name, hash)| Blob {
-            name,
-            hash: hash.into(),
-        })
+        .map(|(name, hash)| (name, Hash::from(hash)))
         .collect();
     // create a collection and add it to the db as well
-    let collection = Collection::new(blobs)?;
     let hash = db.insert_many(collection.to_blobs()).unwrap();
     // create a new iroh runtime with 1 worker thread, reusing the existing tokio runtime
     let rt = runtime::Handle::from_current(1)?;

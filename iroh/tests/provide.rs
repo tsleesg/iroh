@@ -10,7 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use futures::FutureExt;
 use iroh::{
-    collection::{Blob, Collection},
+    collection::Collection,
     node::{Builder, Event, Node},
 };
 use iroh_net::{key::SecretKey, NodeId};
@@ -147,12 +147,7 @@ async fn multiple_clients() -> Result<()> {
     let mut db = iroh_bytes::store::readonly_mem::Store::default();
     let expect_hash = db.insert(content.as_slice());
     let expect_name = "hello_world".to_string();
-    let collection = Collection::new(
-        vec![Blob {
-            name: expect_name.clone(),
-            hash: expect_hash,
-        }],
-    )?;
+    let collection = Collection::from_iter([(&expect_name, expect_hash)]);
     let hash = db.insert_many(collection.to_blobs()).unwrap();
     let rt = test_runtime();
     let node = test_node(db).runtime(&rt).spawn().await?;
@@ -173,8 +168,8 @@ async fn multiple_clients() -> Result<()> {
                 let request = GetRequest::all(hash);
                 let (collection, children, _stats) =
                     run_collection_get_request(opts, request).await?;
-                assert_eq!(expected_name, &collection.blobs()[0].name);
-                assert_eq!(&file_hash, &collection.blobs()[0].hash);
+                assert_eq!(expected_name, &collection[0].0);
+                assert_eq!(&file_hash, &collection[0].1);
                 assert_eq!(expected_data, &children[&0]);
 
                 anyhow::Ok(())
@@ -227,16 +222,13 @@ where
         // get expected hash of file
         let hash = blake3::hash(&data);
         let hash = Hash::from(hash);
-        let blob = Blob {
-            name: name.clone(),
-            hash,
-        };
+        let blob = (name.clone(), hash);
         blobs.push(blob);
 
         // keep track of expected values
         expects.push((name, path, hash));
     }
-    let collection = Collection::new(blobs)?;
+    let collection = Collection::from_iter(blobs);
     let collection_hash = mdb.insert_many(collection.to_blobs()).unwrap();
 
     // sort expects by name to match the canonical order of blobs
@@ -259,14 +251,14 @@ where
     let opts = get_options(node.node_id(), addrs);
     let request = GetRequest::all(collection_hash);
     let (collection, children, _stats) = run_collection_get_request(opts, request).await?;
-    assert_eq!(num_blobs, collection.blobs().len());
+    assert_eq!(num_blobs, collection.len());
     for (i, (name, hash)) in lookup.into_iter().enumerate() {
         let hash = Hash::from(hash);
-        let blob = &collection.blobs()[i];
+        let (ename, ehash) = &collection[i];
         let expect = mdb.get(&hash).unwrap();
         let got = &children[&(i as u64)];
-        assert_eq!(name, blob.name);
-        assert_eq!(hash, blob.hash);
+        assert_eq!(&name, ename);
+        assert_eq!(&hash, ehash);
         assert_eq!(&expect, got);
     }
 
@@ -338,13 +330,7 @@ async fn test_server_close() {
     let _guard = iroh_test::logging::setup();
     let mut db = iroh_bytes::store::readonly_mem::Store::default();
     let child_hash = db.insert(b"hello there");
-    let collection = Collection::new(
-        vec![Blob {
-            name: "hello".to_string(),
-            hash: child_hash,
-        }],
-    )
-    .unwrap();
+    let collection = Collection::from_iter([("hello", child_hash)]);
     let hash = db.insert_many(collection.to_blobs()).unwrap();
     let mut node = test_node(db).runtime(&rt).spawn().await.unwrap();
     let node_addr = node.local_endpoint_addresses().await.unwrap();
@@ -397,16 +383,7 @@ fn create_test_db(
     entries: impl IntoIterator<Item = (impl Into<String>, impl AsRef<[u8]>)>,
 ) -> (iroh_bytes::store::readonly_mem::Store, Hash) {
     let (mut db, hashes) = iroh_bytes::store::readonly_mem::Store::new(entries);
-    let collection = Collection::new(
-        hashes
-            .into_iter()
-            .map(|(name, hash)| Blob {
-                name,
-                hash: hash.into(),
-            })
-            .collect(),
-    )
-    .unwrap();
+    let collection = Collection::from_iter(hashes);
     let hash = db.insert_many(collection.to_blobs()).unwrap();
     (db, hash)
 }
@@ -547,12 +524,12 @@ async fn test_run_ticket() {
 
 /// Utility to validate that the children of a collection are correct
 fn validate_children(collection: Collection, children: BTreeMap<u64, Bytes>) -> anyhow::Result<()> {
-    let blobs = collection.into_inner();
+    let blobs = collection.into_iter().collect::<Vec<_>>();
     anyhow::ensure!(blobs.len() == children.len());
-    for (child, blob) in blobs.into_iter().enumerate() {
+    for (child, (_name, hash)) in blobs.into_iter().enumerate() {
         let child = child as u64;
         let data = children.get(&child).unwrap();
-        anyhow::ensure!(blob.hash == blake3::hash(data).into());
+        anyhow::ensure!(hash == blake3::hash(data).into());
     }
     Ok(())
 }
