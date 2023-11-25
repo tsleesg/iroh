@@ -40,9 +40,8 @@ num_enum = "0.7"
 once_cell = "1.18.0"
 parking_lot = "0.12.1"
 postcard = { version = "1", default-features = false, features = ["alloc", "use-std", "experimental-derive"] }
-quinn = "0.10"
-quinn-proto = "0.10.5"
-quinn-udp = "0.4"
+quinn = { default-features = false, version = "0.11" }
+quinn-proto = "0.11"
 rand = "0.8"
 rand_core = "0.6.4"
 rcgen = "0.11"
@@ -59,7 +58,7 @@ stun-rs = "0.1.5"
 surge-ping = "0.8.0"
 thiserror = "1"
 time = "0.3.20"
-tokio = { version = "1", features = ["io-util", "macros", "sync", "rt", "net", "fs", "io-std", "signal", "process"] }
+tokio = { version = "1", features = ["io-util", "macros", "sync", "rt"], default-features = false }
 tokio-rustls = { version = "0.24" }
 tokio-rustls-acme = { version = "0.2" }
 tokio-util = { version = "0.7", features = ["io-util", "io", "codec"] }
@@ -71,6 +70,9 @@ webpki = { package = "rustls-webpki", version = "0.101.4", features = ["std"] }
 webpki-roots = "0.25"
 x509-parser = "0.15"
 zeroize = "1.5"
+
+# sys-net
+quinn-udp = { version = "0.5", default-features = false }
 
 # derper
 clap = { version = "4", features = ["derive"], optional = true }
@@ -101,7 +103,7 @@ pretty_assertions = "1.4"
 proptest = "1.2.0"
 rand_chacha = "0.3.1"
 testdir = "0.8"
-tokio = { version = "1", features = ["io-util", "sync", "rt", "net", "fs", "macros", "time", "test-util"] }
+tokio = { version = "1", features = ["io-util", "sync", "rt", "macros", "time", "test-util"], default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 iroh-test = { path = "../iroh-test" }
 serde_json = "1.0.107"
@@ -114,9 +116,14 @@ harness = false
 duct = "0.13.6"
 
 [features]
-default = ["metrics"]
+default = ["metrics", "sys-net"]
 derper = ["clap", "toml", "rustls-pemfile", "regex", "serde_with", "tracing-subscriber"]
 metrics = ["iroh-metrics/metrics"]
+# Network dependencies (not used in the browser)
+sys-net = ["tokio/net", "tokio/fs", "tokio/signal", "quinn-udp/network"]
+
+# Wasm compat
+wasm = ["ring/wasm32_unknown_unknown_js", "quinn/wasm"]
 
 [[bin]]
 name = "derper"
