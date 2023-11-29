@@ -146,8 +146,8 @@ async fn multiple_clients() -> Result<()> {
 
     let mut db = iroh_bytes::store::readonly_mem::Store::default();
     let expect_hash = db.insert(content.as_slice());
-    let expect_name = "hello_world".to_string();
-    let collection = Collection::from_iter([(&expect_name, expect_hash)]);
+    let expect_name = "hello_world";
+    let collection = Collection::from_iter([(expect_name, expect_hash)]);
     let hash = db.insert_many(collection.to_blobs()).unwrap();
     let rt = test_runtime();
     let node = test_node(db).runtime(&rt).spawn().await?;
@@ -155,7 +155,7 @@ async fn multiple_clients() -> Result<()> {
     let mut tasks = Vec::new();
     for _i in 0..3 {
         let file_hash: Hash = expect_hash;
-        let name = expect_name.clone();
+        let name = expect_name;
         let addrs = node.local_address().unwrap();
         let peer_id = node.node_id();
         let content = content.to_vec();
@@ -164,7 +164,7 @@ async fn multiple_clients() -> Result<()> {
             async move {
                 let opts = get_options(peer_id, addrs);
                 let expected_data = &content;
-                let expected_name = &name;
+                let expected_name = name;
                 let request = GetRequest::all(hash);
                 let (collection, children, _stats) =
                     run_collection_get_request(opts, request).await?;
@@ -228,8 +228,8 @@ where
         // keep track of expected values
         expects.push((name, path, hash));
     }
-    let collection = Collection::from_iter(blobs);
-    let collection_hash = mdb.insert_many(collection.to_blobs()).unwrap();
+    let collection_orig = Collection::from_iter(blobs);
+    let collection_hash = mdb.insert_many(collection_orig.to_blobs()).unwrap();
 
     // sort expects by name to match the canonical order of blobs
     expects.sort_by(|a, b| a.0.cmp(&b.0));
@@ -252,6 +252,7 @@ where
     let request = GetRequest::all(collection_hash);
     let (collection, children, _stats) = run_collection_get_request(opts, request).await?;
     assert_eq!(num_blobs, collection.len());
+    println!("{:#?} {:#?}", collection, collection_orig);
     for (i, (name, hash)) in lookup.into_iter().enumerate() {
         let hash = Hash::from(hash);
         let (ename, ehash) = &collection[i];

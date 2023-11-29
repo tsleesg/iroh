@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Collection {
     /// Links to the blobs in this collection
-    pub(crate) blobs: Vec<(String, Hash)>,
+    blobs: Vec<(String, Hash)>,
 }
 
 impl std::ops::Index<usize> for Collection {
