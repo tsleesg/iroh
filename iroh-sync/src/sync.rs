@@ -662,8 +662,8 @@ impl Ord for Entry {
 }
 
 impl SignedEntry {
-    #[cfg(feature = "fs-store")]
-    pub(crate) fn new(signature: EntrySignature, entry: Entry) -> Self {
+    /// Create a new signed entry from its parts.
+    pub fn new(signature: EntrySignature, entry: Entry) -> Self {
         SignedEntry { signature, entry }
     }
 

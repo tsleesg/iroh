@@ -15,6 +15,7 @@ pub use iroh_base::base32;
 pub mod client;
 pub mod collection;
 pub mod dial;
+pub mod docs_snapshot;
 pub mod downloader;
 pub mod get;
 pub mod node;
