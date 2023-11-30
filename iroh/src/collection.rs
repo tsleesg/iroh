@@ -63,12 +63,20 @@ impl IntoIterator for Collection {
 }
 
 /// Metadata for a collection
+///
+/// This is the wire format for the metadata blob.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 struct CollectionMeta {
+    header: [u8; 13], // Must contain "CollectionV0."
     names: Vec<String>,
 }
 
 impl Collection {
+    /// The header for the collection format.
+    ///
+    /// This is the start of the metadata blob.
+    pub const HEADER: &'static [u8; 13] = b"CollectionV0.";
+
     /// Convert the collection to an iterator of blobs, with the last being the
     /// root blob.
     ///
@@ -76,6 +84,7 @@ impl Collection {
     /// hash of the last blob as the collection hash.
     pub fn to_blobs(&self) -> impl Iterator<Item = Bytes> {
         let meta = CollectionMeta {
+            header: *Self::HEADER,
             names: self.names(),
         };
         let meta_bytes = postcard::to_stdvec(&meta).unwrap();
@@ -109,6 +118,12 @@ impl Collection {
             let curr = at_meta.next(meta_link);
             let (curr, names) = curr.concatenate_into_vec().await?;
             let names = postcard::from_bytes::<CollectionMeta>(&names)?;
+            anyhow::ensure!(
+                names.header == *Self::HEADER,
+                "expected header {:?}, got {:?}",
+                Self::HEADER,
+                names.header
+            );
             let collection = Collection::from_parts(children, names);
             (curr.next(), collection)
         };
@@ -193,7 +208,10 @@ impl Collection {
             names.push(name);
             links.push(hash);
         }
-        let meta = CollectionMeta { names };
+        let meta = CollectionMeta {
+            header: *Self::HEADER,
+            names,
+        };
         (links, meta)
     }
 
@@ -253,6 +271,7 @@ mod tests {
     #[test]
     fn roundtrip_collection_meta() {
         let expected = CollectionMeta {
+            header: *Collection::HEADER,
             names: vec!["test".to_string(), "a".to_string(), "b".to_string()],
         };
         let mut buf = bytes::BytesMut::zeroed(1024);

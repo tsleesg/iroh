@@ -2,7 +2,6 @@ use std::{
     collections::BTreeMap,
     net::SocketAddr,
     ops::Range,
-    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -206,7 +205,7 @@ where
     let mut expects = Vec::new();
     let num_blobs = file_opts.len();
 
-    let (mut mdb, lookup) = iroh_bytes::store::readonly_mem::Store::new(file_opts.clone());
+    let (mut mdb, _lookup) = iroh_bytes::store::readonly_mem::Store::new(file_opts.clone());
     let mut blobs = Vec::new();
 
     for opt in file_opts.into_iter() {
