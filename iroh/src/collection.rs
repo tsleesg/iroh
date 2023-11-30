@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// A collection of blobs
 ///
 /// Note that the format is subject to change.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, Default)]
 pub struct Collection {
     /// Links to the blobs in this collection
     blobs: Vec<(String, Hash)>,
@@ -27,12 +27,6 @@ impl std::ops::Index<usize> for Collection {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.blobs[index]
-    }
-}
-
-impl Default for Collection {
-    fn default() -> Self {
-        Self { blobs: Vec::new() }
     }
 }
 
@@ -56,6 +50,15 @@ where
         let mut res = Self::default();
         res.extend(iter);
         res
+    }
+}
+
+impl IntoIterator for Collection {
+    type Item = (String, Hash);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.blobs.into_iter()
     }
 }
 
@@ -209,11 +212,6 @@ impl Collection {
         self.blobs.iter().map(|(name, _)| name.clone()).collect()
     }
 
-    /// Take ownership of the blobs in this collection
-    pub fn into_iter(self) -> impl Iterator<Item = (String, Hash)> {
-        self.blobs.into_iter()
-    }
-
     /// Iterate over the blobs in this collection
     pub fn iter(&self) -> impl Iterator<Item = &(String, Hash)> {
         self.blobs.iter()
@@ -222,6 +220,11 @@ impl Collection {
     /// Get the number of blobs in this collection
     pub fn len(&self) -> usize {
         self.blobs.len()
+    }
+
+    /// Check if this collection is empty
+    pub fn is_empty(&self) -> bool {
+        self.blobs.is_empty()
     }
 }
 

@@ -211,10 +211,9 @@ where
 
     for opt in file_opts.into_iter() {
         let (name, data) = opt;
-        let name = name.into();
+        let name: String = name.into();
         println!("Sending {}: {}b", name, data.len());
 
-        let path = PathBuf::from(&name);
         // get expected hash of file
         let hash = blake3::hash(&data);
         let hash = Hash::from(hash);
@@ -222,13 +221,10 @@ where
         blobs.push(blob);
 
         // keep track of expected values
-        expects.push((name, path, hash));
+        expects.push((name, hash));
     }
     let collection_orig = Collection::from_iter(blobs);
     let collection_hash = mdb.insert_many(collection_orig.to_blobs()).unwrap();
-
-    // sort expects by name to match the canonical order of blobs
-    expects.sort_by(|a, b| a.0.cmp(&b.0));
 
     let node = test_node(mdb.clone()).local_pool(rt).spawn().await?;
 
@@ -248,15 +244,13 @@ where
     let request = GetRequest::all(collection_hash);
     let (collection, children, _stats) = run_collection_get_request(opts, request).await?;
     assert_eq!(num_blobs, collection.len());
-    println!("{:#?} {:#?}", collection, collection_orig);
-    for (i, (name, hash)) in lookup.into_iter().enumerate() {
-        let hash = Hash::from(hash);
-        let (ename, ehash) = &collection[i];
-        let expect = mdb.get(&hash).unwrap();
+    for (i, (expected_name, expected_hash)) in expects.iter().enumerate() {
+        let (name, hash) = &collection[i];
         let got = &children[&(i as u64)];
-        assert_eq!(&name, ename);
-        assert_eq!(&hash, ehash);
-        assert_eq!(&expect, got);
+        let expected = mdb.get(expected_hash).unwrap();
+        assert_eq!(expected_name, name);
+        assert_eq!(expected_hash, hash);
+        assert_eq!(expected, got);
     }
 
     // We have to wait for the completed event before shutting down the node.
