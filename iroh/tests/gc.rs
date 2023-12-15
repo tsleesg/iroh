@@ -1,4 +1,3 @@
-#![cfg_attr(target_os = "windows", allow(unused_imports))]
 use std::time::Duration;
 
 use anyhow::Result;
@@ -419,10 +418,13 @@ mod flat {
         Ok(tt)
     }
 
+    fn sync_all() {
+        unsafe {
+            libc::sync();
+        }
+    }
+
     /// Test that partial files are deleted.
-    ///
-    /// TODO: figure out why this in particular fails frequently on windows.
-    #[cfg(unix)]
     #[tokio::test]
     async fn gc_flat_partial() -> Result<()> {
         let _ = tracing_subscriber::fmt::try_init();
@@ -447,12 +449,14 @@ mod flat {
 
         // partial data and outboard files should be there
         step(&evs).await;
+        sync_all();
         assert!(count_partial_data(&h1)? == 1);
         assert!(count_partial_outboard(&h1)? == 1);
 
         drop(tt1);
         // partial data and outboard files should be gone
         step(&evs).await;
+        sync_all();
         assert!(count_partial_data(&h1)? == 0);
         assert!(count_partial_outboard(&h1)? == 0);
 
