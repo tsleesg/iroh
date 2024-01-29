@@ -464,7 +464,7 @@ mod flat {
         let count_partial_outboard = count_partial_outboard(dir.clone());
 
         let bao_store = iroh_bytes::store::flat::Store::load(dir.clone()).await?;
-        let node = wrap_in_node(bao_store.clone(), Duration::from_secs(1)).await;
+        let node = wrap_in_node(bao_store.clone(), Duration::from_secs(2)).await;
         let evs = attach_db_events(&node).await;
 
         let mut deleted = Vec::new();
