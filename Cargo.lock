@@ -2288,6 +2288,7 @@ dependencies = [
  "serde_json",
  "serde_test",
  "smallvec",
+ "testdir",
  "thiserror",
  "tokio",
  "tokio-util",

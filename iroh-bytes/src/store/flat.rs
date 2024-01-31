@@ -1726,6 +1726,23 @@ impl FileName {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use testdir::testdir;
+    use crate::store::Store as StoreTrait;
+
+    #[tokio::test]
+    async fn small_file_stress() {
+        let dir = testdir!();
+        {
+            let db = Store::load(dir).await.unwrap();
+            let mut tags = Vec::new();
+            for i in 0..100000 {
+                let data: Bytes = i.to_string().into();
+                let tag = db.import_bytes(data, BlobFormat::Raw).await.unwrap();
+                println!("tag: {}", i);
+                tags.push(tag);
+            }
+        }
+    }
 
     fn arb_hash() -> impl Strategy<Value = Hash> {
         any::<[u8; 32]>().prop_map(|x| x.into())
