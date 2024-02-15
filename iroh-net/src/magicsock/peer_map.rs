@@ -169,12 +169,13 @@ impl NodeMap {
         Option<SocketAddr>,
         Option<DerpUrl>,
         Vec<PingAction>,
+        bool,
     )> {
         let mut inner = self.inner.lock();
         let ep = inner.get_mut(EndpointId::QuicMappedAddr(addr))?;
         let public_key = *ep.public_key();
-        let (udp_addr, derp_url, msgs) = ep.get_send_addrs(have_ipv6);
-        Some((public_key, udp_addr, derp_url, msgs))
+        let (udp_addr, derp_url, msgs, waiting_for_pings) = ep.get_send_addrs(have_ipv6);
+        Some((public_key, udp_addr, derp_url, msgs, waiting_for_pings))
     }
 
     pub fn notify_shutdown(&self) {

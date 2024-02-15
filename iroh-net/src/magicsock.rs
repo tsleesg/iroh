@@ -348,7 +348,12 @@ impl Inner {
             .node_map
             .get_send_addrs_for_quic_mapped_addr(&dest, self.ipv6_reported.load(Ordering::Relaxed))
         {
-            Some((public_key, udp_addr, derp_url, mut msgs)) => {
+            Some((public_key, udp_addr, derp_url, mut msgs, waiting_for_pings)) => {
+                warn!(
+                    node = &public_key.fmt_short(),
+                    "udp_addr: {udp_addr:?}, msgs: {}, waiting_for_pings: {waiting_for_pings}",
+                    msgs.len()
+                );
                 let mut pings_sent = false;
                 // If we have pings to send, we *have* to send them out first.
                 if !msgs.is_empty() {
@@ -391,20 +396,30 @@ impl Inner {
                 let n = transmits.len();
 
                 // send derp
-                if let Some(ref derp_url) = derp_url {
-                    self.try_send_derp(derp_url, public_key, split_packets(&transmits));
-                    derp_sent = true;
-                }
+                // TODO(ramfox): simulate derp-only mode
+                // if let Some(ref derp_url) = derp_url {
+                //     self.try_send_derp(derp_url, public_key, split_packets(&transmits));
+                //     derp_sent = true;
+                // }
 
                 if !derp_sent && !udp_sent && !pings_sent {
-                    warn!(node = %public_key.fmt_short(), "failed to send: no UDP or DERP addr");
-                    let err = udp_error.unwrap_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::NotConnected,
-                            "no UDP or Derp address available for node",
-                        )
-                    });
-                    Poll::Ready(Err(err))
+                    if !derp_sent && !pings_sent && udp_error.is_some() {
+                        return Poll::Ready(Err(udp_error.expect("checked")));
+                    }
+                    warn!("no UDP or DERP addr, waiting for CallMeMaybe or timeout");
+                    Poll::Pending
+                    // if waiting_for_pings {
+                    //     warn!(node = %public_key.fmt_short(), "cannot send: no UDP or DERP addr, but waiting for pings");
+                    //     return Poll::Pending;
+                    // }
+                    // warn!(node = %public_key.fmt_short(), "failed to send: no UDP or DERP addr");
+                    // let err = udp_error.unwrap_or_else(|| {
+                    //     io::Error::new(
+                    //         io::ErrorKind::NotConnected,
+                    //         "no UDP or Derp address available for node",
+                    //     )
+                    // });
+                    // Poll::Ready(Err(err))
                 } else {
                     trace!(
                         node = %public_key.fmt_short(),
@@ -666,6 +681,7 @@ impl Inner {
                 self.node_map.handle_pong(sender, &src, pong);
             }
             disco::Message::CallMeMaybe(cm) => {
+                warn!("RECIEVED CALLMEMAYBE");
                 inc!(MagicsockMetrics, recv_disco_call_me_maybe);
                 if !matches!(src, DiscoMessageSource::Derp { .. }) {
                     warn!("call-me-maybe packets should only come via DERP");
@@ -1812,14 +1828,14 @@ impl Actor {
         }
         let url = &dm.url;
 
-        let quic_mapped_addr = self.inner.node_map.receive_derp(url, dm.src);
+        // let quic_mapped_addr = self.inner.node_map.receive_derp(url, dm.src);
 
         // the derp packet is made up of multiple udp packets, prefixed by a u16 be length prefix
         //
         // split the packet into these parts
         let parts = PacketSplitIter::new(dm.buf);
         // Normalize local_ip
-        let dst_ip = self.normalized_local_addr().ok().map(|addr| addr.ip());
+        // let dst_ip = self.normalized_local_addr().ok().map(|addr| addr.ip());
 
         let mut out = Vec::new();
         for part in parts {
@@ -1830,14 +1846,15 @@ impl Actor {
                         continue;
                     }
 
-                    let meta = quinn_udp::RecvMeta {
-                        len: part.len(),
-                        stride: part.len(),
-                        addr: quic_mapped_addr.0,
-                        dst_ip,
-                        ecn: None,
-                    };
-                    out.push(Ok((dm.src, meta, part)));
+                    // TODO(ramfox): simulate disco-only mode
+                    // let meta = quinn_udp::RecvMeta {
+                    //     len: part.len(),
+                    //     stride: part.len(),
+                    //     addr: quic_mapped_addr.0,
+                    //     dst_ip,
+                    //     ecn: None,
+                    // };
+                    // out.push(Ok((dm.src, meta, part)));
                 }
                 Err(e) => {
                     out.push(Err(e));

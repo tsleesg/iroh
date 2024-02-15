@@ -364,6 +364,7 @@ impl Endpoint {
     #[instrument("disco", skip_all, fields(node = %self.public_key.fmt_short()))]
     pub(super) fn ping_timeout(&mut self, txid: stun::TransactionId) {
         if let Some(sp) = self.sent_pings.remove(&txid) {
+            warn!("PING EXPIRED {txid}");
             debug!(tx = %hex::encode(txid), addr = %sp.to, "pong not received in timeout");
             match sp.to {
                 SendAddr::Udp(addr) => {
@@ -451,15 +452,15 @@ impl Endpoint {
                 .await
                 .ok();
         });
-        self.sent_pings.insert(
-            tx_id,
-            SentPing {
-                to,
-                at: now,
-                purpose,
-                timer,
-            },
-        );
+        let ping = SentPing {
+            to,
+            at: now,
+            purpose,
+            timer,
+        };
+
+        warn!("SENT PING: {tx_id}, {ping:?}");
+        self.sent_pings.insert(tx_id, ping);
     }
 
     /// Send a DISCO call-me-maybe message to the peer.
@@ -759,6 +760,7 @@ impl Endpoint {
             is_derp = %src.is_derp(),
             "received pong"
         );
+        warn!("RECEIVED PONG: {}, src: {src:?}", m.tx_id);
         match self.sent_pings.remove(&m.tx_id) {
             None => {
                 // This is not a pong for a ping we sent.
@@ -1004,7 +1006,7 @@ impl Endpoint {
     pub(crate) fn get_send_addrs(
         &mut self,
         have_ipv6: bool,
-    ) -> (Option<SocketAddr>, Option<DerpUrl>, Vec<PingAction>) {
+    ) -> (Option<SocketAddr>, Option<DerpUrl>, Vec<PingAction>, bool) {
         let now = Instant::now();
         self.last_used.replace(now);
         let (udp_addr, derp_url) = self.addr_for_send(&now, have_ipv6);
@@ -1021,7 +1023,7 @@ impl Endpoint {
             "found send address",
         );
 
-        (udp_addr, derp_url, ping_msgs)
+        (udp_addr, derp_url, ping_msgs, !self.sent_pings.is_empty())
     }
 
     /// Get the direct addresses for this endpoint.
