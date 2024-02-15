@@ -403,11 +403,13 @@ impl Inner {
                 // }
 
                 if !derp_sent && !udp_sent && !pings_sent {
-                    if !derp_sent && !pings_sent && udp_error.is_some() {
-                        return Poll::Ready(Err(udp_error.expect("checked")));
+                    if let Some(err) = udp_error {
+                        return Poll::Ready(Err(err));
                     }
                     warn!("no UDP or DERP addr, waiting for CallMeMaybe or timeout");
-                    Poll::Pending
+                    return Poll::Ready(Ok(0));
+                    // return Poll::Pending;
+
                     // if waiting_for_pings {
                     //     warn!(node = %public_key.fmt_short(), "cannot send: no UDP or DERP addr, but waiting for pings");
                     //     return Poll::Pending;
