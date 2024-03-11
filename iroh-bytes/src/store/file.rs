@@ -650,8 +650,8 @@ pub(crate) struct EntryStateResponse {
 }
 
 ///
-#[derive(Debug, Clone)]
-pub struct Store(Arc<StoreInner>);
+#[derive(Debug)]
+pub struct Store(Arc<StoreInner>, String);
 
 impl Store {
     /// Load or create a new store.
@@ -671,7 +671,7 @@ impl Store {
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "no tokio runtime"))?;
         let inner =
             tokio::task::spawn_blocking(move || StoreInner::new_sync(path, options, rt)).await??;
-        Ok(Self(Arc::new(inner)))
+        Ok(Self(Arc::new(inner), "original".into()))
     }
 
     ///
@@ -759,11 +759,11 @@ impl StoreInner {
         std::fs::create_dir_all(path.parent().unwrap())?;
         let temp: Arc<RwLock<TempCounterMap>> = Default::default();
         let (actor, tx) = Actor::new(&path, options.clone(), temp.clone(), rt)?;
-        let handle = std::thread::spawn(move || {
+        let handle = std::thread::Builder::new().name("bao store actor".into()).spawn(move || {
             if let Err(cause) = actor.run_batched() {
                 tracing::error!("redb actor failed: {}", cause);
             }
-        });
+        })?;
         Ok(Self {
             tx,
             temp,
@@ -1145,11 +1145,34 @@ impl StoreInner {
 
 impl Drop for StoreInner {
     fn drop(&mut self) {
+        tracing::error!("file store drop!");
         if let Some(handle) = self.handle.take() {
             self.tx.send(ActorMessage::Shutdown).ok();
             handle.join().ok();
         }
     }
+}
+
+impl Clone for Store {
+    fn clone(&self) -> Self {
+        let res = self.0.clone();
+        let count = Arc::strong_count(&res);
+        let curr = std::thread::current();
+        let thread = curr.name().unwrap_or_default();
+        let name = format!("clone {}", count);
+        tracing::error!("file store clone {} ({}) '{}'", count, thread, name);
+        Self(res, name)
+    }
+}
+
+impl Drop for Store {
+    fn drop(&mut self) {
+        let count = Arc::strong_count(&self.0);
+        let curr = std::thread::current();
+        let thread = curr.name().unwrap_or_default();
+        tracing::error!("file store drop '{}' {} ({})", self.1, count, thread);
+    }
+
 }
 
 struct ActorState {
@@ -1496,7 +1519,7 @@ impl Actor {
                     tracing::debug!("starting read transaction");
                     let txn = self.db.begin_read()?;
                     let tables = ReadOnlyTables::new(&txn)?;
-                    for msg in msgs.batch_iter(10000, Duration::from_millis(500)) {
+                    for msg in msgs.batch_iter(100, Duration::from_millis(500)) {
                         if let Err(msg) = self.state.handle_readonly(&tables, msg)? {
                             msgs.push_back(msg).expect("just recv'd");
                             break;
@@ -1508,7 +1531,7 @@ impl Actor {
                     tracing::debug!("starting write transaction");
                     let txn = self.db.begin_write()?;
                     let mut tables = Tables::new(&txn)?;
-                    for msg in msgs.batch_iter(10000, Duration::from_millis(500)) {
+                    for msg in msgs.batch_iter(100, Duration::from_millis(500)) {
                         if let Err(msg) = self.state.handle_readwrite(&mut tables, msg)? {
                             msgs.push_back(msg).expect("just recv'd");
                             break;

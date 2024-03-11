@@ -293,12 +293,14 @@ where
         let gossip = Gossip::from_endpoint(endpoint.clone(), Default::default(), &addr.info);
 
         // spawn the sync engine
+        // bao store clone!
         let downloader = Downloader::new(self.db.clone(), endpoint.clone(), lp.clone());
         let ds = self.docs.clone();
         let sync = SyncEngine::spawn(
             endpoint.clone(),
             gossip.clone(),
             self.docs,
+            // bao store clone!
             self.db.clone(),
             downloader,
         );

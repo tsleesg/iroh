@@ -858,6 +858,7 @@ where
                 let doc = doc.clone();
                 let imp = task_imp.clone();
                 Ok(async move {
+                    tracing::error!("set_hash {} {} {}", hex::encode(&key), hash.to_hex(), size);
                     doc.set_hash(author_id, key, hash, size).await?;
                     imp.import_progress();
                     anyhow::Ok(size)

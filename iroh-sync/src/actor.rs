@@ -215,14 +215,15 @@ impl SyncHandle {
             action_rx,
             content_status_callback,
         };
-        std::thread::spawn(move || {
+        std::thread::Builder::new().name("sync-actor".into()).spawn(move || {
             let span = error_span!("sync", %me);
             let _enter = span.enter();
 
             if let Err(err) = actor.run() {
                 error!("Sync actor closed with error: {err:?}");
             }
-        });
+            tracing::error!("Sync actor closed");
+        }).unwrap();
         SyncHandle { tx: action_tx }
     }
 
@@ -490,6 +491,15 @@ struct Actor<S: store::Store> {
     states: OpenReplicas<S>,
     action_rx: flume::Receiver<Action>,
     content_status_callback: Option<ContentStatusCallback>,
+}
+
+impl<S: store::Store> Drop for Actor<S> {
+    fn drop(&mut self) {
+        tracing::error!("dropping sync actor {:?}", self.content_status_callback.as_ref().map(|cb| Arc::strong_count(cb)));
+        self.content_status_callback.take();
+        tracing::error!("dropped sync actor. cb drop done");
+    }
+
 }
 
 impl<S: store::Store> Actor<S> {

@@ -51,6 +51,13 @@ pub struct SyncEngine {
     content_status_cb: ContentStatusCallback,
 }
 
+impl Drop for SyncEngine {
+    fn drop(&mut self) {
+        let content_status_cb_count = Arc::strong_count(&self.content_status_cb);
+        tracing::error!("Dropping SyncEngine {content_status_cb_count}");
+    }
+}
+
 impl SyncEngine {
     /// Start the sync engine.
     ///
@@ -68,6 +75,7 @@ impl SyncEngine {
         let me = endpoint.node_id().fmt_short();
 
         let content_status_cb = {
+            // bao store clone!
             let bao_store = bao_store.clone();
             Arc::new(move |hash| entry_to_content_status(bao_store.entry_status_sync(&hash)))
         };
