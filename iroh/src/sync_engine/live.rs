@@ -23,6 +23,8 @@ use tokio::{
 };
 use tracing::{debug, error, info, instrument, trace, warn, Instrument, Span};
 
+use crate::node::BlobStorage;
+
 use super::gossip::ToGossipActor;
 use super::state::{NamespaceStates, Origin, SyncReason};
 
@@ -125,13 +127,13 @@ type SyncConnectRes = (
 type SyncAcceptRes = Result<SyncFinished, AcceptError>;
 
 // Currently peers might double-sync in both directions.
-pub struct LiveActor<B: iroh_bytes::store::Store> {
+pub struct LiveActor {
     /// Receiver for actor messages.
     inbox: mpsc::Receiver<ToLiveActor>,
     sync: SyncHandle,
     endpoint: MagicEndpoint,
     gossip: Gossip,
-    bao_store: B,
+    bao_store: BlobStorage,
     downloader: Downloader,
     replica_events_tx: flume::Sender<iroh_sync::Event>,
     replica_events_rx: flume::Receiver<iroh_sync::Event>,
@@ -155,14 +157,14 @@ pub struct LiveActor<B: iroh_bytes::store::Store> {
     /// Sync state per replica and peer
     state: NamespaceStates,
 }
-impl<B: iroh_bytes::store::Store> LiveActor<B> {
+impl LiveActor {
     /// Create the live actor.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         sync: SyncHandle,
         endpoint: MagicEndpoint,
         gossip: Gossip,
-        bao_store: B,
+        bao_store: BlobStorage,
         downloader: Downloader,
         inbox: mpsc::Receiver<ToLiveActor>,
         sync_actor_tx: mpsc::Sender<ToLiveActor>,

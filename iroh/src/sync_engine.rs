@@ -27,6 +27,8 @@ mod state;
 use gossip::GossipActor;
 use live::{LiveActor, ToLiveActor};
 
+use crate::node::NodeStorage;
+
 pub use self::live::SyncEvent;
 pub use self::state::{Origin, SyncReason};
 pub use iroh_sync::net::SYNC_ALPN;
@@ -56,11 +58,10 @@ impl SyncEngine {
     ///
     /// This will spawn two tokio tasks for the live sync coordination and gossip actors, and a
     /// thread for the [`iroh_sync::actor::SyncHandle`].
-    pub fn spawn<S: iroh_sync::store::Store, B: iroh_bytes::store::Store>(
+    pub fn spawn(
         endpoint: MagicEndpoint,
         gossip: Gossip,
-        replica_store: S,
-        bao_store: B,
+        node_storage: NodeStorage,
         downloader: Downloader,
     ) -> Self {
         let (live_actor_tx, to_live_actor_recv) = mpsc::channel(ACTOR_CHANNEL_CAP);
@@ -68,20 +69,18 @@ impl SyncEngine {
         let me = endpoint.node_id().fmt_short();
 
         let content_status_cb = {
-            let bao_store = bao_store.clone();
-            Arc::new(move |hash| entry_to_content_status(bao_store.entry_status_sync(&hash)))
+            let db = node_storage.blobs();
+            Arc::new(move |hash| entry_to_content_status(db.entry_status_sync(&hash)))
         };
-        let sync = SyncHandle::spawn(
-            replica_store.clone(),
-            Some(content_status_cb.clone()),
-            me.clone(),
-        );
+
+        let (blobs, docs) = node_storage.split();
+        let sync = SyncHandle::spawn(docs, Some(content_status_cb.clone()), me.clone());
 
         let mut actor = LiveActor::new(
             sync.clone(),
             endpoint.clone(),
             gossip.clone(),
-            bao_store,
+            blobs,
             downloader.clone(),
             to_live_actor_recv,
             live_actor_tx.clone(),

@@ -323,6 +323,15 @@ where
         }
     }
 
+    pub fn map_store<R: Store<E>, F: FnOnce(S) -> R>(self, f: F) -> Peer<E, R> {
+        Peer {
+            store: f(self.store),
+            max_set_size: self.max_set_size,
+            split_factor: self.split_factor,
+            _phantom: Default::default(),
+        }
+    }
+
     /// Generates the initial message.
     pub fn initial_message(&self) -> Result<Message<E>, S::Error> {
         Message::init(&self.store)

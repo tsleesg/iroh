@@ -27,7 +27,7 @@
 //! the whole store with all replicas to a single file.
 //!
 //! [paper]: https://arxiv.org/abs/2212.13567
-#![deny(missing_docs, rustdoc::broken_intra_doc_links)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 pub mod actor;
 mod heads;

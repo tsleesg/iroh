@@ -253,6 +253,24 @@ pub struct Replica<S: ranger::Store<SignedEntry> + PublicKeyStore + store::Downl
     closed: bool,
 }
 
+impl<S: ranger::Store<SignedEntry> + PublicKeyStore + store::DownloadPolicyStore> Replica<S> {
+    pub fn map_store<
+        R: ranger::Store<SignedEntry> + PublicKeyStore + store::DownloadPolicyStore,
+        F: FnOnce(S) -> R,
+    >(
+        self,
+        f: F,
+    ) -> Replica<R> {
+        Replica {
+            capability: self.capability,
+            peer: self.peer.map_store(f),
+            subscribers: self.subscribers,
+            content_status_cb: self.content_status_cb,
+            closed: self.closed,
+        }
+    }
+}
+
 impl<S: ranger::Store<SignedEntry> + PublicKeyStore + store::DownloadPolicyStore + 'static>
     Replica<S>
 {

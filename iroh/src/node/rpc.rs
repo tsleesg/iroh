@@ -47,11 +47,11 @@ use crate::rpc_protocol::{
 use super::{NodeInner, HEALTH_POLL_WAIT};
 
 #[derive(Debug, Clone)]
-pub(crate) struct Handler<D> {
-    pub(crate) inner: Arc<NodeInner<D>>,
+pub(crate) struct Handler {
+    pub(crate) inner: Arc<NodeInner>,
 }
 
-impl<D: BaoStore> Handler<D> {
+impl Handler {
     pub(crate) fn handle_rpc_request<E: ServiceEndpoint<ProviderService>>(
         &self,
         msg: ProviderRequest,
@@ -252,7 +252,7 @@ impl<D: BaoStore> Handler<D> {
     async fn blob_list_impl(self, co: &Co<RpcResult<BlobListResponse>>) -> io::Result<()> {
         use bao_tree::io::fsm::Outboard;
 
-        let db = self.inner.db.clone();
+        let db = self.inner.node_storage.blobs().clone();
         for blob in db.blobs().await? {
             let blob = blob?;
             let Some(entry) = db.get(&blob).await? else {
@@ -270,7 +270,7 @@ impl<D: BaoStore> Handler<D> {
         self,
         co: &Co<RpcResult<BlobListIncompleteResponse>>,
     ) -> io::Result<()> {
-        let db = self.inner.db.clone();
+        let db = self.inner.node_storage.blobs().clone();
         for hash in db.partial_blobs().await? {
             let hash = hash?;
             let Ok(PossiblyPartialEntry::Partial(entry)) = db.get_possibly_partial(&hash).await
@@ -293,7 +293,7 @@ impl<D: BaoStore> Handler<D> {
         self,
         co: &Co<RpcResult<BlobListCollectionsResponse>>,
     ) -> anyhow::Result<()> {
-        let db = self.inner.db.clone();
+        let db = self.inner.node_storage.blobs().clone();
         let local = self.inner.rt.clone();
         let tags = db.tags().await.unwrap();
         for item in tags {
@@ -356,12 +356,20 @@ impl<D: BaoStore> Handler<D> {
     }
 
     async fn blob_delete_tag(self, msg: DeleteTagRequest) -> RpcResult<()> {
-        self.inner.db.set_tag(msg.name, None).await?;
+        self.inner
+            .node_storage
+            .blobs()
+            .set_tag(msg.name, None)
+            .await?;
         Ok(())
     }
 
     async fn blob_delete_blob(self, msg: BlobDeleteBlobRequest) -> RpcResult<()> {
-        self.inner.db.delete(vec![msg.hash]).await?;
+        self.inner
+            .node_storage
+            .blobs()
+            .delete(vec![msg.hash])
+            .await?;
         Ok(())
     }
 
@@ -371,7 +379,7 @@ impl<D: BaoStore> Handler<D> {
     ) -> impl Stream<Item = ListTagsResponse> + Send + 'static {
         tracing::info!("blob_list_tags");
         Gen::new(|co| async move {
-            let tags = self.inner.db.tags().await.unwrap();
+            let tags = self.inner.node_storage.blobs().tags().await.unwrap();
             #[allow(clippy::manual_flatten)]
             for item in tags {
                 if let Ok((name, HashAndFormat { hash, format })) = item {
@@ -389,7 +397,7 @@ impl<D: BaoStore> Handler<D> {
     ) -> impl Stream<Item = ValidateProgress> + Send + 'static {
         let (tx, rx) = mpsc::channel(1);
         let tx2 = tx.clone();
-        let db = self.inner.db.clone();
+        let db = self.inner.node_storage.blobs().clone();
         tokio::task::spawn(async move {
             if let Err(e) = db.validate(tx).await {
                 tx2.send(ValidateProgress::Abort(e.into())).await.unwrap();
@@ -480,7 +488,8 @@ impl<D: BaoStore> Handler<D> {
 
         let (temp_tag, size) = self
             .inner
-            .db
+            .node_storage
+            .blobs()
             .import_file(root, import_mode, BlobFormat::Raw, import_progress)
             .await?;
 
@@ -531,7 +540,7 @@ impl<D: BaoStore> Handler<D> {
             x
         });
         iroh_bytes::export::export(
-            &self.inner.db,
+            self.inner.node_storage.blobs(),
             entry.content_hash(),
             path,
             false,
@@ -555,9 +564,9 @@ impl<D: BaoStore> Handler<D> {
             out,
         } = msg;
 
-        let db = self.inner.db.clone();
+        let db = self.inner.node_storage.blobs().clone();
         let hash_and_format = HashAndFormat { hash, format };
-        let temp_pin = self.inner.db.temp_tag(hash_and_format);
+        let temp_pin = db.temp_tag(hash_and_format);
         let get_conn = {
             let progress = progress.clone();
             let ep = self.inner.endpoint.clone();
@@ -645,7 +654,7 @@ impl<D: BaoStore> Handler<D> {
             let result: Vec<_> = futures::stream::iter(data_sources)
                 .map(|source| {
                     let import_progress = import_progress.clone();
-                    let db = self.inner.db.clone();
+                    let db = self.inner.node_storage.blobs().clone();
                     async move {
                         let name = source.name().to_string();
                         let (tag, size) = db
@@ -670,12 +679,13 @@ impl<D: BaoStore> Handler<D> {
                 .map(|(name, hash, _, tag)| ((name, hash), tag))
                 .unzip();
 
-            collection.store(&self.inner.db).await?
+            collection.store(self.inner.node_storage.blobs()).await?
         } else {
             // import a single file
             let (tag, _size) = self
                 .inner
-                .db
+                .node_storage
+                .blobs()
                 .import_file(root, import_mode, BlobFormat::Raw, import_progress)
                 .await?;
             tag
@@ -686,12 +696,13 @@ impl<D: BaoStore> Handler<D> {
         let tag = match tag {
             SetTagOption::Named(tag) => {
                 self.inner
-                    .db
+                    .node_storage
+                    .blobs()
                     .set_tag(tag.clone(), Some(*hash_and_format))
                     .await?;
                 tag
             }
-            SetTagOption::Auto => self.inner.db.create_tag(*hash_and_format).await?,
+            SetTagOption::Auto => self.inner.node_storage.blobs().create_tag(*hash_and_format).await?,
         };
         progress
             .send(AddProgress::AllDone {
@@ -809,7 +820,8 @@ impl<D: BaoStore> Handler<D> {
         });
         let (temp_tag, _len) = self
             .inner
-            .db
+            .node_storage
+            .blobs()
             .import_stream(stream, BlobFormat::Raw, import_progress)
             .await?;
         let hash_and_format = *temp_tag.inner();
@@ -817,12 +829,13 @@ impl<D: BaoStore> Handler<D> {
         let tag = match msg.tag {
             SetTagOption::Named(tag) => {
                 self.inner
-                    .db
+                    .node_storage
+                    .blobs()
                     .set_tag(tag.clone(), Some(hash_and_format))
                     .await?;
                 tag
             }
-            SetTagOption::Auto => self.inner.db.create_tag(hash_and_format).await?,
+            SetTagOption::Auto => self.inner.node_storage.blobs().create_tag(hash_and_format).await?,
         };
         progress
             .send(AddProgress::AllDone { hash, tag, format })
@@ -835,7 +848,7 @@ impl<D: BaoStore> Handler<D> {
         req: BlobReadAtRequest,
     ) -> impl Stream<Item = RpcResult<BlobReadAtResponse>> + Send + 'static {
         let (tx, rx) = flume::bounded(RPC_BLOB_GET_CHANNEL_CAP);
-        let db = self.inner.db.clone();
+        let db = self.inner.node_storage.blobs().clone();
         self.inner.rt.spawn_pinned(move || async move {
             let entry = db.get(&req.hash).await.unwrap();
             if let Err(err) = read_loop(
@@ -941,22 +954,23 @@ impl<D: BaoStore> Handler<D> {
             tags_to_delete,
         } = req;
 
-        let temp_tag = collection.store(&self.inner.db).await?;
+        let temp_tag = collection.store(self.inner.node_storage.blobs()).await?;
         let hash_and_format = temp_tag.inner();
         let HashAndFormat { hash, .. } = *hash_and_format;
         let tag = match tag {
             SetTagOption::Named(tag) => {
                 self.inner
-                    .db
+                    .node_storage
+                    .blobs()
                     .set_tag(tag.clone(), Some(*hash_and_format))
                     .await?;
                 tag
             }
-            SetTagOption::Auto => self.inner.db.create_tag(*hash_and_format).await?,
+            SetTagOption::Auto => self.inner.node_storage.blobs().create_tag(*hash_and_format).await?,
         };
 
         for tag in tags_to_delete {
-            self.inner.db.set_tag(tag, None).await?;
+            self.inner.node_storage.blobs().set_tag(tag, None).await?;
         }
 
         Ok(CreateCollectionResponse { hash, tag })
@@ -967,7 +981,7 @@ impl<D: BaoStore> Handler<D> {
         req: BlobGetCollectionRequest,
     ) -> RpcResult<BlobGetCollectionResponse> {
         let hash = req.hash;
-        let db = self.inner.db.clone();
+        let db = self.inner.node_storage.blobs().clone();
         let collection = self
             .rt()
             .spawn_pinned(move || async move { Collection::load(&db, &hash).await })

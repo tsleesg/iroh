@@ -7,7 +7,7 @@
 //! To shut down the node, call [`Node::shutdown`].
 use std::future::Future;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
@@ -17,7 +17,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use futures::future::{BoxFuture, Shared};
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use iroh_bytes::downloader::Downloader;
-use iroh_bytes::store::{GcMarkEvent, GcSweepEvent, Map, ReadableStore, Store as BaoStore};
+use iroh_bytes::store::{GcMarkEvent, GcSweepEvent, ReadableStore, Store as BaoStore};
 use iroh_bytes::BlobFormat;
 use iroh_bytes::{protocol::Closed, Hash};
 use iroh_gossip::net::{Gossip, GOSSIP_ALPN};
@@ -46,6 +46,9 @@ use crate::sync_engine::{SyncEngine, SYNC_ALPN};
 use crate::ticket::BlobTicket;
 
 mod rpc;
+pub mod storage;
+
+pub use storage::*;
 
 const MAX_CONNECTIONS: u32 = 1024;
 const MAX_STREAMS: u64 = 10;
@@ -94,67 +97,74 @@ impl Default for GcPolicy {
 /// The returned [`Node`] is awaitable to know when it finishes.  It can be terminated
 /// using [`Node::shutdown`].
 #[derive(Debug)]
-pub struct Builder<D, S = iroh_sync::store::memory::Store, E = DummyServerEndpoint>
+pub struct Builder<E = DummyServerEndpoint>
 where
-    D: Map,
-    S: DocStore,
     E: ServiceEndpoint<ProviderService>,
 {
     bind_port: u16,
     secret_key: SecretKey,
     rpc_endpoint: E,
-    db: D,
+    storage: NodeStorageConfig,
     keylog: bool,
     derp_mode: DerpMode,
     gc_policy: GcPolicy,
     rt: Option<tokio_util::task::LocalPoolHandle>,
-    docs: S,
     /// Path to store peer data. If `None`, peer data will not be persisted.
     peers_data_path: Option<PathBuf>,
 }
 
 const PROTOCOLS: [&[u8]; 3] = [&iroh_bytes::protocol::ALPN, GOSSIP_ALPN, SYNC_ALPN];
 
-impl<D: Map, S: DocStore> Builder<D, S> {
-    /// Creates a new builder for [`Node`] using the given database.
-    fn with_db_and_store(db: D, docs: S) -> Self {
+impl Default for Builder {
+    fn default() -> Self {
         Self {
             bind_port: DEFAULT_BIND_PORT,
             secret_key: SecretKey::generate(),
-            db,
+            storage: NodeStorageConfig::default(),
             keylog: false,
             derp_mode: DerpMode::Default,
             rpc_endpoint: Default::default(),
             gc_policy: GcPolicy::Disabled,
             rt: None,
-            docs,
             peers_data_path: None,
         }
     }
 }
 
-impl<D, S, E> Builder<D, S, E>
+impl<E> Builder<E>
 where
-    D: BaoStore,
-    S: DocStore,
     E: ServiceEndpoint<ProviderService>,
 {
+    /// Use memory based storage.
+    pub fn mem_storage(mut self) -> Self {
+        self.storage = NodeStorageConfig::Mem;
+        self
+    }
+
+    /// Use disk based storage.
+    pub async fn disk_storage(mut self, blobs: impl AsRef<Path>, docs: impl AsRef<Path>)  -> Self {
+        self.storage = NodeStorageConfig::Disk {
+            blobs: blobs.as_ref().into(),
+            docs: docs.as_ref().into(),
+        };
+        self
+    }
+
     /// Configure rpc endpoint, changing the type of the builder to the new endpoint type.
     pub fn rpc_endpoint<E2: ServiceEndpoint<ProviderService>>(
         self,
         value: E2,
-    ) -> Builder<D, S, E2> {
+    ) -> Builder<E2> {
         // we can't use ..self here because the return type is different
         Builder {
             bind_port: self.bind_port,
             secret_key: self.secret_key,
-            db: self.db,
+            storage: self.storage,
             keylog: self.keylog,
             rpc_endpoint: value,
             derp_mode: self.derp_mode,
             gc_policy: self.gc_policy,
             rt: self.rt,
-            docs: self.docs,
             peers_data_path: self.peers_data_path,
         }
     }
@@ -224,7 +234,7 @@ where
     /// This will create the underlying network server and spawn a tokio task accepting
     /// connections.  The returned [`Node`] can be used to control the task as well as
     /// get information about it.
-    pub async fn spawn(self) -> Result<Node<D>> {
+    pub async fn spawn(self) -> Result<Node> {
         trace!("spawning node");
         let lp = self
             .rt
@@ -264,33 +274,32 @@ where
 
         let addr = endpoint.my_addr().await?;
 
+        let node_storage = NodeStorage::from_config(self.storage).await?;
+
         // initialize the gossip protocol
         let gossip = Gossip::from_endpoint(endpoint.clone(), Default::default(), &addr.info);
 
         // spawn the sync engine
-        let downloader = Downloader::new(self.db.clone(), endpoint.clone(), lp.clone());
-        let ds = self.docs.clone();
+        let downloader = Downloader::new(node_storage.blobs().clone(), endpoint.clone(), lp.clone());
         let sync = SyncEngine::spawn(
             endpoint.clone(),
             gossip.clone(),
-            self.docs,
-            self.db.clone(),
+            node_storage.clone(),
             downloader,
         );
 
         let callbacks = Callbacks::default();
         let gc_task = if let GcPolicy::Interval(gc_period) = self.gc_policy {
             tracing::info!("Starting GC task with interval {:?}", gc_period);
-            let db = self.db.clone();
             let callbacks = callbacks.clone();
-            let task = lp.spawn_pinned(move || Self::gc_loop(db, ds, gc_period, callbacks));
+            let task = lp.spawn_pinned(move || Self::gc_loop(node_storage, gc_period, callbacks));
             Some(AbortingJoinHandle(task))
         } else {
             None
         };
         let (internal_rpc, controller) = quic_rpc::transport::flume::connection(1);
         let inner = Arc::new(NodeInner {
-            db: self.db,
+            node_storage,
             endpoint: endpoint.clone(),
             secret_key: self.secret_key,
             controller,
@@ -356,7 +365,7 @@ where
         server: MagicEndpoint,
         callbacks: Callbacks,
         mut cb_receiver: mpsc::Receiver<EventCallback>,
-        handler: rpc::Handler<D>,
+        handler: rpc::Handler,
         rpc: E,
         internal_rpc: impl ServiceEndpoint<ProviderService>,
         gossip: Gossip,
@@ -445,7 +454,7 @@ where
             .ok();
     }
 
-    async fn gc_loop(db: D, ds: S, gc_period: Duration, callbacks: Callbacks) {
+    async fn gc_loop(db: NodeStorage, gc_period: Duration, callbacks: Callbacks) {
         tracing::debug!("GC loop starting {:?}", gc_period);
         'outer: loop {
             // do delay before the two phases of GC
@@ -454,8 +463,8 @@ where
             callbacks
                 .send(Event::Db(iroh_bytes::store::Event::GcStarted))
                 .await;
-            db.clear_live().await;
-            let doc_hashes = match ds.content_hashes() {
+            db.blobs().clear_live().await;
+            let doc_hashes = match db.docs().content_hashes() {
                 Ok(hashes) => hashes,
                 Err(err) => {
                     tracing::error!("Error getting doc hashes: {}", err);
@@ -471,14 +480,14 @@ where
                     None
                 }
             });
-            db.add_live(doc_hashes).await;
+            db.blobs().add_live(doc_hashes).await;
             if doc_db_error {
                 tracing::error!("Error getting doc hashes, skipping GC to be safe");
                 continue 'outer;
             }
 
             tracing::debug!("Starting GC mark phase");
-            let mut stream = db.gc_mark(None);
+            let mut stream = db.blobs().gc_mark(None);
             while let Some(item) = stream.next().await {
                 match item {
                     GcMarkEvent::CustomDebug(text) => {
@@ -495,7 +504,7 @@ where
             }
 
             tracing::debug!("Starting GC sweep phase");
-            let mut stream = db.gc_sweep();
+            let mut stream = db.blobs().gc_sweep();
             while let Some(item) = stream.next().await {
                 match item {
                     GcSweepEvent::CustomDebug(text) => {
@@ -519,10 +528,10 @@ where
 
 // TODO: Restructure this code to not take all these arguments.
 #[allow(clippy::too_many_arguments)]
-async fn handle_connection<D: BaoStore>(
+async fn handle_connection(
     connecting: quinn::Connecting,
     alpn: String,
-    node: Arc<NodeInner<D>>,
+    node: Arc<NodeInner>,
     gossip: Gossip,
     sync: SyncEngine,
 ) -> Result<()> {
@@ -532,7 +541,7 @@ async fn handle_connection<D: BaoStore>(
         alpn if alpn == iroh_bytes::protocol::ALPN => {
             iroh_bytes::provider::handle_connection(
                 connecting,
-                node.db.clone(),
+                node.node_storage.blobs().clone(),
                 node.callbacks.clone(),
                 node.rt.clone(),
             )
@@ -585,14 +594,14 @@ impl iroh_bytes::provider::EventSender for Callbacks {
 /// await the [`Node`] struct directly, it will complete when the task completes.  If
 /// this is dropped the node task is not stopped but keeps running.
 #[derive(Debug, Clone)]
-pub struct Node<D> {
-    inner: Arc<NodeInner<D>>,
+pub struct Node {
+    inner: Arc<NodeInner>,
     task: Shared<BoxFuture<'static, Result<(), Arc<JoinError>>>>,
 }
 
 #[derive(derive_more::Debug)]
-struct NodeInner<D> {
-    db: D,
+struct NodeInner {
+    node_storage: NodeStorage,
     endpoint: MagicEndpoint,
     secret_key: SecretKey,
     cancel_token: CancellationToken,
@@ -616,12 +625,12 @@ pub enum Event {
     Db(iroh_bytes::store::Event),
 }
 
-impl<D: ReadableStore> Node<D> {
+impl Node {
     /// Returns a new builder for the [`Node`].
     ///
     /// Once the done with the builder call [`Builder::spawn`] to create the node.
-    pub fn builder<S: DocStore>(bao_store: D, doc_store: S) -> Builder<D, S> {
-        Builder::with_db_and_store(bao_store, doc_store)
+    pub async fn builder() -> Builder {
+        Builder::default()
     }
 
     /// Returns the [`MagicEndpoint`] of the node.
@@ -721,7 +730,7 @@ impl<D: ReadableStore> Node<D> {
 }
 
 /// The future completes when the spawned tokio task finishes.
-impl<D> Future for Node<D> {
+impl Future for Node {
     type Output = Result<(), Arc<JoinError>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
@@ -729,7 +738,7 @@ impl<D> Future for Node<D> {
     }
 }
 
-impl<D> NodeInner<D> {
+impl NodeInner {
     async fn local_endpoint_addresses(&self) -> Result<Vec<SocketAddr>> {
         let endpoints = self
             .endpoint

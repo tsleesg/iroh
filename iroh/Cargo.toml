@@ -52,6 +52,7 @@ tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["codec", "io-util", "io", "time"] }
 tracing = "0.1"
 walkdir = "2"
+ed25519-dalek = { version = "2.0.0", features = ["serde", "rand_core"] }
 
 # CLI
 clap = { version = "4", features = ["derive"], optional = true }
@@ -72,8 +73,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = tr
 url = { version = "2.4", features = ["serde"] }
 colored = { version = "2.0.4", optional = true }
 
-# Examples
-ed25519-dalek = { version = "2.0.0", features = ["serde", "rand_core"], optional = true }
 
 [features]
 default = ["cli", "metrics"]
