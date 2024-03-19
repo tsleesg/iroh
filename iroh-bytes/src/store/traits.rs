@@ -1,12 +1,12 @@
 //! Traits for in-memory or persistent maps of blob with bao encoded outboards.
 use std::{collections::BTreeSet, io, path::PathBuf};
 
-use bao_tree::io::fsm::{BaoContentItem, Outboard, OutboardMut};
+use bao_tree::io::fsm::{BaoContentItem, Outboard};
 use bytes::Bytes;
-use futures::{future, Future, Stream};
+use futures::{Future, Stream};
 use genawaiter::rc::{Co, Gen};
 use iroh_base::rpc::RpcError;
-use iroh_io::{AsyncSliceReader, AsyncSliceWriter};
+use iroh_io::AsyncSliceReader;
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncRead, sync::mpsc};
 
@@ -45,7 +45,7 @@ pub enum EntryStatus {
 #[derive(Debug)]
 pub enum PossiblyPartialEntry<D: MapMut> {
     /// A complete entry.
-    Complete(D::Entry),
+    Complete(D::EntryMut),
     /// A partial entry.
     Partial(D::EntryMut),
     /// We got nothing.
@@ -229,43 +229,6 @@ impl<W: BaoBatchWriter, F: Fn(u64, usize) -> io::Result<()> + 'static> BaoBatchW
     }
 }
 
-/// A combined batch writer
-///
-/// This is just temporary to allow reusing the existing store implementations
-/// that have separate data and outboard writers.
-#[derive(Debug)]
-pub struct CombinedBatchWriter<D, O> {
-    /// data part
-    pub data: D,
-    /// outboard part
-    pub outboard: O,
-}
-
-impl<D, O> BaoBatchWriter for CombinedBatchWriter<D, O>
-where
-    D: AsyncSliceWriter,
-    O: OutboardMut,
-{
-    async fn write_batch(&mut self, _size: u64, batch: Vec<BaoContentItem>) -> io::Result<()> {
-        for item in batch {
-            match item {
-                BaoContentItem::Parent(parent) => {
-                    self.outboard.save(parent.node, &parent.pair).await?;
-                }
-                BaoContentItem::Leaf(leaf) => {
-                    self.data.write_bytes_at(leaf.offset.0, leaf.data).await?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn sync(&mut self) -> io::Result<()> {
-        future::try_join(self.data.sync(), self.outboard.sync()).await?;
-        Ok(())
-    }
-}
-
 /// A mutable bao map.
 ///
 /// This extends the readonly [`Map`] trait with methods to create and modify entries.
@@ -273,15 +236,17 @@ pub trait MapMut: Map {
     /// An entry that is possibly writable
     type EntryMut: MapEntryMut;
 
-    /// Get an existing partial entry, or create a new one.
+    /// Get an existing entry as an EntryMut.
     ///
-    /// We need to know the size of the partial entry. This might produce an
-    /// error e.g. if there is not enough space on disk.
-    fn get_or_create(
+    /// For implementations where EntryMut and Entry are the same type, this is just an alias for
+    /// `get`.
+    fn get_mut(
         &self,
-        hash: Hash,
-        size: u64,
-    ) -> impl Future<Output = io::Result<Self::EntryMut>> + Send;
+        hash: &Hash,
+    ) -> impl Future<Output = io::Result<Option<Self::EntryMut>>> + Send;
+
+    /// Get an existing partial entry, or create a new one.
+    fn get_or_create(&self, hash: Hash) -> impl Future<Output = io::Result<Self::EntryMut>> + Send;
 
     /// Find out if the data behind a `hash` is complete, partial, or not present.
     ///
@@ -293,17 +258,6 @@ pub trait MapMut: Map {
     ///
     /// Don't count on this to be efficient.
     fn entry_status_sync(&self, hash: &Hash) -> io::Result<EntryStatus>;
-
-    /// Get an existing entry.
-    ///
-    /// This will return either a complete entry, a partial entry, or not found.
-    ///
-    /// This function should not block to perform io. The knowledge about
-    /// partial entries must be present in memory.
-    fn get_possibly_partial(
-        &self,
-        hash: &Hash,
-    ) -> impl Future<Output = io::Result<PossiblyPartialEntry<Self>>> + Send;
 
     /// Upgrade a partial entry to a complete entry.
     fn insert_complete(&self, entry: Self::EntryMut)

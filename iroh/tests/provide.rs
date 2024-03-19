@@ -240,7 +240,7 @@ where
     for (i, (expected_name, expected_hash)) in expects.iter().enumerate() {
         let (name, hash) = &collection[i];
         let got = &children[&(i as u64)];
-        let expected = mdb.get(expected_hash).unwrap();
+        let expected = mdb.get_content(expected_hash).unwrap();
         assert_eq!(expected_name, name);
         assert_eq!(expected_hash, hash);
         assert_eq!(expected, got);
@@ -447,7 +447,7 @@ async fn test_chunk_not_found_1() {
     let db = iroh_bytes::store::mem::Store::new();
     let data = (0..1024 * 64).map(|i| i as u8).collect::<Vec<_>>();
     let hash = blake3::hash(&data).into();
-    let _entry = db.get_or_create(hash, data.len() as u64).await.unwrap();
+    let _entry = db.get_or_create(hash).await.unwrap();
     let node = match test_node(db).spawn().await {
         Ok(provider) => provider,
         Err(_) => {
