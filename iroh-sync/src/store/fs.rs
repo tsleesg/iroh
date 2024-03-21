@@ -10,15 +10,12 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use bytes::Bytes;
 use derive_more::From;
 use ed25519_dalek::{SignatureError, VerifyingKey};
 use iroh_base::hash::Hash;
 use parking_lot::RwLock;
-use redb::{
-    Database, MultimapTableDefinition, ReadOnlyTable, ReadableMultimapTable, ReadableTable,
-    TableDefinition,
-};
+use redb::{Database, ReadableMultimapTable, ReadableTable};
+use tables::*;
 
 use crate::{
     keys::Author,
@@ -37,75 +34,16 @@ mod bounds;
 mod migrations;
 mod query;
 mod ranges;
+mod tables;
 
-use self::bounds::{ByKeyBounds, RecordsBounds};
 use self::query::QueryIterator;
 use self::ranges::{TableRange, TableReader};
+use self::{
+    bounds::{ByKeyBounds, RecordsBounds},
+    tables::{LatestPerAuthorKey, LatestPerAuthorValue, RecordsId, RecordsTable, RecordsValue},
+};
 
 pub use self::ranges::RecordsRange;
-
-// Table Definitions
-
-/// Table: Authors
-/// Key:   `[u8; 32]` # AuthorId
-/// Value: `[u8; 32]` # Author
-const AUTHORS_TABLE: TableDefinition<&[u8; 32], &[u8; 32]> = TableDefinition::new("authors-1");
-
-/// Table: Namespaces v1 (replaced by Namespaces v2 in migration )
-/// Key:   `[u8; 32]` # NamespaceId
-/// Value: `[u8; 32]` # NamespaceSecret
-const NAMESPACES_TABLE_V1: TableDefinition<&[u8; 32], &[u8; 32]> =
-    TableDefinition::new("namespaces-1");
-
-/// Table: Namespaces v2
-/// Key:   `[u8; 32]`       # NamespaceId
-/// Value: `(u8, [u8; 32])` # (CapabilityKind, Capability)
-const NAMESPACES_TABLE: TableDefinition<&[u8; 32], (u8, &[u8; 32])> =
-    TableDefinition::new("namespaces-2");
-
-/// Table: Records
-/// Key:   `([u8; 32], [u8; 32], &[u8])`
-///      # (NamespaceId, AuthorId, Key)
-/// Value: `(u64, [u8; 32], [u8; 32], u64, [u8; 32])`
-///      # (timestamp, signature_namespace, signature_author, len, hash)
-const RECORDS_TABLE: TableDefinition<RecordsId, RecordsValue> = TableDefinition::new("records-1");
-type RecordsId<'a> = (&'a [u8; 32], &'a [u8; 32], &'a [u8]);
-type RecordsIdOwned = ([u8; 32], [u8; 32], Bytes);
-type RecordsValue<'a> = (u64, &'a [u8; 64], &'a [u8; 64], u64, &'a [u8; 32]);
-type RecordsTable<'a> = ReadOnlyTable<'a, RecordsId<'static>, RecordsValue<'static>>;
-
-/// Table: Latest per author
-/// Key:   `([u8; 32], [u8; 32])`    # (NamespaceId, AuthorId)
-/// Value: `(u64, Vec<u8>)`          # (Timestamp, Key)
-const LATEST_PER_AUTHOR_TABLE: TableDefinition<LatestPerAuthorKey, LatestPerAuthorValue> =
-    TableDefinition::new("latest-by-author-1");
-type LatestPerAuthorKey<'a> = (&'a [u8; 32], &'a [u8; 32]);
-type LatestPerAuthorValue<'a> = (u64, &'a [u8]);
-
-/// Table: Records by key
-/// Key:   `([u8; 32], Vec<u8>, [u8; 32]])` # (NamespaceId, Key, AuthorId)
-/// Value: `()`
-const RECORDS_BY_KEY_TABLE: TableDefinition<RecordsByKeyId, ()> =
-    TableDefinition::new("records-by-key-1");
-type RecordsByKeyId<'a> = (&'a [u8; 32], &'a [u8], &'a [u8; 32]);
-type RecordsByKeyIdOwned = ([u8; 32], Bytes, [u8; 32]);
-
-/// Table: Peers per document.
-/// Key:   `[u8; 32]`        # NamespaceId
-/// Value: `(u64, [u8; 32])` # ([`Nanos`], &[`PeerIdBytes`]) representing the last time a peer was used.
-const NAMESPACE_PEERS_TABLE: MultimapTableDefinition<&[u8; 32], (Nanos, &PeerIdBytes)> =
-    MultimapTableDefinition::new("sync-peers-1");
-/// Number of seconds elapsed since [`std::time::SystemTime::UNIX_EPOCH`]. Used to register the
-/// last time a peer was useful in a document.
-// NOTE: resolution is nanoseconds, stored as a u64 since this covers ~500years from unix epoch,
-// which should be more than enough
-type Nanos = u64;
-
-/// Table: Download policy
-/// Key:   `[u8; 32]`        # NamespaceId
-/// Value: `Vec<u8>`         # Postcard encoded download policy
-const DOWNLOAD_POLICY_TABLE: TableDefinition<&[u8; 32], &[u8]> =
-    TableDefinition::new("download-policy-1");
 
 /// Manages the replicas and authors for an instance.
 #[derive(Debug, Clone)]
@@ -124,14 +62,8 @@ impl Store {
 
         // Setup all tables
         let write_tx = db.begin_write()?;
-        {
-            let _table = write_tx.open_table(RECORDS_TABLE)?;
-            let _table = write_tx.open_table(NAMESPACES_TABLE)?;
-            let _table = write_tx.open_table(LATEST_PER_AUTHOR_TABLE)?;
-            let _table = write_tx.open_multimap_table(NAMESPACE_PEERS_TABLE)?;
-            let _table = write_tx.open_table(DOWNLOAD_POLICY_TABLE)?;
-            let _table = write_tx.open_table(AUTHORS_TABLE)?;
-        }
+        let tables = Tables::new(&write_tx)?;
+        drop(tables);
         write_tx.commit()?;
 
         // Run database migrations
@@ -162,14 +94,9 @@ impl super::Store for Store {
             return Err(OpenError::AlreadyOpen);
         }
 
-        let read_tx = self.db.begin_read().map_err(anyhow::Error::from)?;
-        let namespace_table = read_tx
-            .open_table(NAMESPACES_TABLE)
-            .map_err(anyhow::Error::from)?;
-        let Some(db_value) = namespace_table
-            .get(namespace_id.as_bytes())
-            .map_err(anyhow::Error::from)?
-        else {
+        let read_tx = self.db.begin_read()?;
+        let tables = ReadOnlyTables::new(&read_tx)?;
+        let Some(db_value) = tables.namespaces.get(namespace_id.as_bytes())? else {
             return Err(OpenError::NotFound);
         };
         let (raw_kind, raw_bytes) = db_value.value();
@@ -187,8 +114,9 @@ impl super::Store for Store {
     fn list_namespaces(&self) -> Result<Self::NamespaceIter<'_>> {
         // TODO: avoid collect
         let read_tx = self.db.begin_read()?;
-        let namespace_table = read_tx.open_table(NAMESPACES_TABLE)?;
-        let namespaces: Vec<_> = namespace_table
+        let tables = ReadOnlyTables::new(&read_tx)?;
+        let namespaces: Vec<_> = tables
+            .namespaces
             .iter()?
             .map(|res| {
                 let capability = parse_capability(res?.1.value())?;
@@ -200,8 +128,8 @@ impl super::Store for Store {
 
     fn get_author(&self, author_id: &AuthorId) -> Result<Option<Author>> {
         let read_tx = self.db.begin_read()?;
-        let author_table = read_tx.open_table(AUTHORS_TABLE)?;
-        let Some(author) = author_table.get(author_id.as_bytes())? else {
+        let tables = ReadOnlyTables::new(&read_tx)?;
+        let Some(author) = tables.authors.get(author_id.as_bytes())? else {
             return Ok(None);
         };
 
@@ -212,8 +140,10 @@ impl super::Store for Store {
     fn import_author(&self, author: Author) -> Result<()> {
         let write_tx = self.db.begin_write()?;
         {
-            let mut author_table = write_tx.open_table(AUTHORS_TABLE)?;
-            author_table.insert(author.id().as_bytes(), &author.to_bytes())?;
+            let mut tables = Tables::new(&write_tx)?;
+            tables
+                .authors
+                .insert(author.id().as_bytes(), &author.to_bytes())?;
         }
         write_tx.commit()?;
         Ok(())
@@ -222,8 +152,9 @@ impl super::Store for Store {
     fn list_authors(&self) -> Result<Self::AuthorsIter<'_>> {
         // TODO: avoid collect
         let read_tx = self.db.begin_read()?;
-        let authors_table = read_tx.open_table(AUTHORS_TABLE)?;
-        let authors: Vec<_> = authors_table
+        let tables = ReadOnlyTables::new(&read_tx)?;
+        let authors: Vec<_> = tables
+            .authors
             .iter()?
             .map(|res| match res {
                 Ok((_key, value)) => Ok(Author::from_bytes(value.value())),
@@ -237,9 +168,9 @@ impl super::Store for Store {
     fn import_namespace(&self, capability: Capability) -> Result<ImportNamespaceOutcome> {
         let write_tx = self.db.begin_write()?;
         let outcome = {
-            let mut namespace_table = write_tx.open_table(NAMESPACES_TABLE)?;
+            let mut tables = Tables::new(&write_tx)?;
             let (capability, outcome) = {
-                let existing = namespace_table.get(capability.id().as_bytes())?;
+                let existing = tables.namespaces.get(capability.id().as_bytes())?;
                 if let Some(existing) = existing {
                     let mut existing = parse_capability(existing.value())?;
                     let outcome = if existing.merge(capability)? {
@@ -254,7 +185,7 @@ impl super::Store for Store {
             };
             let id = capability.id().to_bytes();
             let (kind, bytes) = capability.raw();
-            namespace_table.insert(&id, (kind, &bytes))?;
+            tables.namespaces.insert(&id, (kind, &bytes))?;
             outcome
         };
         write_tx.commit()?;
@@ -267,24 +198,14 @@ impl super::Store for Store {
         }
         let write_tx = self.db.begin_write()?;
         {
-            let mut record_table = write_tx.open_table(RECORDS_TABLE)?;
-            let bounds = RecordsBounds::namespace(*namespace);
-            record_table.drain(bounds.as_ref())?;
-        }
-        {
-            let mut table = write_tx.open_table(RECORDS_BY_KEY_TABLE)?;
+            let mut tables = Tables::new(&write_tx)?;
             let bounds = ByKeyBounds::namespace(*namespace);
-            let _ = table.drain(bounds.as_ref());
-        }
-        {
-            let mut namespace_table = write_tx.open_table(NAMESPACES_TABLE)?;
-            namespace_table.remove(namespace.as_bytes())?;
-        }
-        {
-            let mut peers_table = write_tx.open_multimap_table(NAMESPACE_PEERS_TABLE)?;
-            peers_table.remove_all(namespace.as_bytes())?;
-            let mut dl_policies_table = write_tx.open_table(DOWNLOAD_POLICY_TABLE)?;
-            dl_policies_table.remove(namespace.as_bytes())?;
+            let _ = tables.records_by_key.drain(bounds.as_ref());
+            let bounds = RecordsBounds::namespace(*namespace);
+            tables.records.drain(bounds.as_ref())?;
+            tables.namespaces.remove(namespace.as_bytes())?;
+            tables.namespace_peers.remove_all(namespace.as_bytes())?;
+            tables.download_policy.remove(namespace.as_bytes())?;
         }
         write_tx.commit()?;
         Ok(())
@@ -306,8 +227,8 @@ impl super::Store for Store {
         include_empty: bool,
     ) -> Result<Option<SignedEntry>> {
         let read_tx = self.db.begin_read()?;
-        let record_table = read_tx.open_table(RECORDS_TABLE)?;
-        get_exact(&record_table, namespace, author, key, include_empty)
+        let tables = ReadOnlyTables::new(&read_tx)?;
+        get_exact(&tables.records, namespace, author, key, include_empty)
     }
 
     fn content_hashes(&self) -> Result<Self::ContentHashesIter<'_>> {
@@ -327,12 +248,14 @@ impl super::Store for Store {
             .map(|duration| duration.as_nanos() as u64)?;
         let write_tx = self.db.begin_write()?;
         {
+            let mut tables = Tables::new(&write_tx)?;
             // ensure the document exists
-            let namespaces = write_tx.open_table(NAMESPACES_TABLE)?;
-            anyhow::ensure!(namespaces.get(namespace)?.is_some(), "document not created");
+            anyhow::ensure!(
+                tables.namespaces.get(namespace)?.is_some(),
+                "document not created"
+            );
 
-            let mut peers_table = write_tx.open_multimap_table(NAMESPACE_PEERS_TABLE)?;
-            let mut namespace_peers = peers_table.get(namespace)?;
+            let mut namespace_peers = tables.namespace_peers.get(namespace)?;
 
             // get the oldest entry since it's candidate for removal
             let maybe_oldest = namespace_peers.next().transpose()?.map(|guard| {
@@ -344,7 +267,7 @@ impl super::Store for Store {
                     // the table is empty so the peer can be inserted without further checks since
                     // super::PEERS_PER_DOC_CACHE_SIZE is non zero
                     drop(namespace_peers);
-                    peers_table.insert(namespace, (nanos, peer))?;
+                    tables.namespace_peers.insert(namespace, (nanos, peer))?;
                 }
                 Some((oldest_nanos, oldest_peer)) => {
                     let oldest_peer = &oldest_peer;
@@ -353,8 +276,10 @@ impl super::Store for Store {
                         // oldest peer is the current one, so replacing the entry for the peer will
                         // maintain the size
                         drop(namespace_peers);
-                        peers_table.remove(namespace, (oldest_nanos, oldest_peer))?;
-                        peers_table.insert(namespace, (nanos, peer))?;
+                        tables
+                            .namespace_peers
+                            .remove(namespace, (oldest_nanos, oldest_peer))?;
+                        tables.namespace_peers.insert(namespace, (nanos, peer))?;
                     } else {
                         // calculate the len in the same loop since calling `len` is another fallible operation
                         let mut len = 1;
@@ -374,16 +299,20 @@ impl super::Store for Store {
                             Some(prev_nanos) => {
                                 // the peer was already present, so we can remove the old entry and
                                 // insert the new one without checking the size
-                                peers_table.remove(namespace, (prev_nanos, peer))?;
-                                peers_table.insert(namespace, (nanos, peer))?;
+                                tables
+                                    .namespace_peers
+                                    .remove(namespace, (prev_nanos, peer))?;
+                                tables.namespace_peers.insert(namespace, (nanos, peer))?;
                             }
                             None => {
                                 // the peer is new and the table is non empty, add it and check the
                                 // size to decide if the oldest peer should be evicted
-                                peers_table.insert(namespace, (nanos, peer))?;
+                                tables.namespace_peers.insert(namespace, (nanos, peer))?;
                                 len += 1;
                                 if len > super::PEERS_PER_DOC_CACHE_SIZE.get() {
-                                    peers_table.remove(namespace, (oldest_nanos, oldest_peer))?;
+                                    tables
+                                        .namespace_peers
+                                        .remove(namespace, (oldest_nanos, oldest_peer))?;
                                 }
                             }
                         }
@@ -398,9 +327,9 @@ impl super::Store for Store {
 
     fn get_sync_peers(&self, namespace: &NamespaceId) -> Result<Option<Self::PeersIter<'_>>> {
         let read_tx = self.db.begin_read()?;
-        let peers_table = read_tx.open_multimap_table(NAMESPACE_PEERS_TABLE)?;
+        let tables = ReadOnlyTables::new(&read_tx)?;
         let mut peers = Vec::with_capacity(super::PEERS_PER_DOC_CACHE_SIZE.get());
-        for result in peers_table.get(namespace.as_bytes())?.rev() {
+        for result in tables.namespace_peers.get(namespace.as_bytes())?.rev() {
             let (_nanos, &peer) = result?.value();
             peers.push(peer);
         }
@@ -414,18 +343,17 @@ impl super::Store for Store {
     fn set_download_policy(&self, namespace: &NamespaceId, policy: DownloadPolicy) -> Result<()> {
         let tx = self.db.begin_write()?;
         {
+            let mut tables = Tables::new(&tx)?;
             let namespace = namespace.as_bytes();
 
             // ensure the document exists
-            let namespaces = tx.open_table(NAMESPACES_TABLE)?;
             anyhow::ensure!(
-                namespaces.get(&namespace)?.is_some(),
+                tables.namespaces.get(&namespace)?.is_some(),
                 "document not created"
             );
 
-            let mut table = tx.open_table(DOWNLOAD_POLICY_TABLE)?;
             let value = postcard::to_stdvec(&policy)?;
-            table.insert(namespace, value.as_slice())?;
+            tables.download_policy.insert(namespace, value.as_slice())?;
         }
         tx.commit()?;
         Ok(())
@@ -433,8 +361,8 @@ impl super::Store for Store {
 
     fn get_download_policy(&self, namespace: &NamespaceId) -> Result<DownloadPolicy> {
         let tx = self.db.begin_read()?;
-        let table = tx.open_table(DOWNLOAD_POLICY_TABLE)?;
-        let value = table.get(namespace.as_bytes())?;
+        let tables = ReadOnlyTables::new(&tx)?;
+        let value = tables.download_policy.get(namespace.as_bytes())?;
         Ok(match value {
             None => DownloadPolicy::default(),
             Some(value) => postcard::from_bytes(value.value())?,
@@ -494,11 +422,11 @@ impl crate::ranger::Store<SignedEntry> for StoreInstance {
     /// Get a the first key (or the default if none is available).
     fn get_first(&self) -> Result<RecordIdentifier> {
         let read_tx = self.store.db.begin_read()?;
-        let record_table = read_tx.open_table(RECORDS_TABLE)?;
+        let tables = ReadOnlyTables::new(&read_tx)?;
 
         // TODO: verify this fetches all keys with this namespace
         let bounds = RecordsBounds::namespace(self.namespace);
-        let mut records = record_table.range(bounds.as_ref())?;
+        let mut records = tables.records.range(bounds.as_ref())?;
 
         let Some(record) = records.next() else {
             return Ok(RecordIdentifier::default());
@@ -516,17 +444,16 @@ impl crate::ranger::Store<SignedEntry> for StoreInstance {
 
     fn len(&self) -> Result<usize> {
         let read_tx = self.store.db.begin_read()?;
-        let record_table = read_tx.open_table(RECORDS_TABLE)?;
-
+        let tables = ReadOnlyTables::new(&read_tx)?;
         let bounds = RecordsBounds::namespace(self.namespace);
-        let records = record_table.range(bounds.as_ref())?;
+        let records = tables.records.range(bounds.as_ref())?;
         Ok(records.count())
     }
 
     fn is_empty(&self) -> Result<bool> {
         let read_tx = self.store.db.begin_read()?;
-        let record_table = read_tx.open_table(RECORDS_TABLE)?;
-        Ok(record_table.is_empty()?)
+        let tables = ReadOnlyTables::new(&read_tx)?;
+        Ok(tables.records.is_empty()?)
     }
 
     fn get_fingerprint(&self, range: &Range<RecordIdentifier>) -> Result<Fingerprint> {
@@ -547,7 +474,7 @@ impl crate::ranger::Store<SignedEntry> for StoreInstance {
         let write_tx = self.store.db.begin_write()?;
         {
             // insert into record table
-            let mut record_table = write_tx.open_table(RECORDS_TABLE)?;
+            let mut tables = Tables::new(&write_tx)?;
             let key = (
                 &id.namespace().to_bytes(),
                 &id.author().to_bytes(),
@@ -561,22 +488,20 @@ impl crate::ranger::Store<SignedEntry> for StoreInstance {
                 e.content_len(),
                 hash.as_bytes(),
             );
-            record_table.insert(key, value)?;
+            tables.records.insert(key, value)?;
 
             // insert into by key index table
-            let mut idx_by_key = write_tx.open_table(RECORDS_BY_KEY_TABLE)?;
             let key = (
                 &id.namespace().to_bytes(),
                 id.key(),
                 &id.author().to_bytes(),
             );
-            idx_by_key.insert(key, ())?;
+            tables.records_by_key.insert(key, ())?;
 
             // insert into latest table
-            let mut latest_table = write_tx.open_table(LATEST_PER_AUTHOR_TABLE)?;
             let key = (&e.id().namespace().to_bytes(), &e.id().author().to_bytes());
             let value = (e.timestamp(), e.id().key());
-            latest_table.insert(key, value)?;
+            tables.latest_per_author.insert(key, value)?;
         }
         write_tx.commit()?;
         Ok(())
@@ -621,15 +546,12 @@ impl crate::ranger::Store<SignedEntry> for StoreInstance {
     fn remove(&mut self, id: &RecordIdentifier) -> Result<Option<SignedEntry>> {
         let write_tx = self.store.db.begin_write()?;
         let (namespace, author, key) = id.as_byte_tuple();
-        {
-            let mut table = write_tx.open_table(RECORDS_BY_KEY_TABLE)?;
-            let id = (namespace, key, author);
-            table.remove(id)?;
-        }
         let entry = {
-            let mut table = write_tx.open_table(RECORDS_TABLE)?;
+            let mut tables = Tables::new(&write_tx)?;
+            let id = (namespace, key, author);
+            tables.records_by_key.remove(id)?;
             let id = (namespace, author, key);
-            let value = table.remove(id)?;
+            let value = tables.records.remove(id)?;
             value.map(|value| into_entry(id, value.value()))
         };
         write_tx.commit()?;
@@ -665,14 +587,14 @@ impl crate::ranger::Store<SignedEntry> for StoreInstance {
         let bounds = RecordsBounds::author_prefix(id.namespace(), id.author(), id.key_bytes());
         let write_tx = self.store.db.begin_write()?;
         let count = {
-            let mut table = write_tx.open_table(RECORDS_TABLE)?;
+            let mut tables = Tables::new(&write_tx)?;
             let cb = |_k: RecordsId, v: RecordsValue| {
                 let (timestamp, _namespace_sig, _author_sig, len, hash) = v;
                 let record = Record::new(hash.into(), len, timestamp);
 
                 predicate(&record)
             };
-            let iter = table.drain_filter(bounds.as_ref(), cb)?;
+            let iter = tables.records.drain_filter(bounds.as_ref(), cb)?;
             iter.count()
         };
         write_tx.commit()?;
@@ -969,8 +891,8 @@ mod tests {
         // check that the new table is there, even if empty
         {
             let read_tx = store.db.begin_read()?;
-            let record_by_key_table = read_tx.open_table(RECORDS_BY_KEY_TABLE)?;
-            assert_eq!(record_by_key_table.len()?, 0);
+            let tables = ReadOnlyTables::new(&read_tx)?;
+            assert_eq!(tables.records_by_key.len()?, 0);
         }
 
         // TODO: write test checking that the indexing is done correctly
