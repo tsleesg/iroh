@@ -1,15 +1,26 @@
-use std::{net::SocketAddr, num::ParseIntError, str::FromStr};
+use std::{net::SocketAddr, num::ParseIntError, str::FromStr, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use clap::Parser;
-use iroh_net::{relay::RelayMode, MagicEndpoint, NodeAddr};
+use ::quinn::{Connection, RecvStream, SendStream};
+use socket2::{Domain, Protocol, Socket, Type};
+use stats::{Stats, TransferResult};
 use tokio::runtime::{Builder, Runtime};
-use tracing::trace;
+use tracing::warn;
 
+pub mod iroh;
+pub mod quinn;
+pub mod s2n;
 pub mod stats;
 
-pub const ALPN: &[u8] = b"n0/iroh-net-bench/0";
+#[derive(Parser, Debug, Clone, Copy)]
+#[clap(name = "bulk")]
+pub enum Commands {
+    Iroh(iroh::Opt),
+    Quinn(quinn::Opt),
+    S2n(s2n::Opt),
+}
 
 pub fn configure_tracing_subscriber() {
     tracing::subscriber::set_global_default(
@@ -20,51 +31,95 @@ pub fn configure_tracing_subscriber() {
     .unwrap();
 }
 
-/// Creates a server endpoint which runs on the given runtime
-pub fn server_endpoint(rt: &tokio::runtime::Runtime, opt: &Opt) -> (NodeAddr, MagicEndpoint) {
-    let _guard = rt.enter();
-    rt.block_on(async move {
-        let ep = MagicEndpoint::builder()
-            .alpns(vec![ALPN.to_vec()])
-            .relay_mode(RelayMode::Disabled)
-            .transport_config(transport_config(opt))
-            .bind(0)
-            .await
-            .unwrap();
-        let addr = ep.local_addr().unwrap();
-        let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), addr.0.port());
-        let addr = NodeAddr::new(ep.node_id()).with_direct_addresses([addr]);
-        (addr, ep)
-    })
+pub fn rt() -> Runtime {
+    Builder::new_current_thread().enable_all().build().unwrap()
 }
 
-/// Create a client endpoint and client connection
-pub async fn connect_client(
-    server_addr: NodeAddr,
-    opt: Opt,
-) -> Result<(MagicEndpoint, quinn::Connection)> {
-    let endpoint = MagicEndpoint::builder()
-        .alpns(vec![ALPN.to_vec()])
-        .relay_mode(RelayMode::Disabled)
-        .transport_config(transport_config(&opt))
-        .bind(0)
-        .await
-        .unwrap();
+fn parse_byte_size(s: &str) -> Result<u64, ParseIntError> {
+    let s = s.trim();
 
-    // TODO: We don't support passing client transport config currently
-    // let mut client_config = quinn::ClientConfig::new(Arc::new(crypto));
-    // client_config.transport_config(Arc::new(transport_config(&opt)));
+    let multiplier = match s.chars().last() {
+        Some('T') => 1024 * 1024 * 1024 * 1024,
+        Some('G') => 1024 * 1024 * 1024,
+        Some('M') => 1024 * 1024,
+        Some('k') => 1024,
+        _ => 1,
+    };
 
-    let connection = endpoint
-        .connect(server_addr, ALPN)
-        .await
-        .context("unable to connect")?;
-    trace!("connected");
+    let s = if multiplier != 1 {
+        &s[..s.len() - 1]
+    } else {
+        s
+    };
 
-    Ok((endpoint, connection))
+    let base: u64 = u64::from_str(s)?;
+
+    Ok(base * multiplier)
 }
 
-pub async fn drain_stream(stream: &mut quinn::RecvStream, read_unordered: bool) -> Result<usize> {
+#[derive(Default)]
+pub struct ClientStats {
+    upload_stats: Stats,
+    download_stats: Stats,
+}
+
+impl ClientStats {
+    pub fn print(&self, client_id: usize) {
+        println!();
+        println!("Client {client_id} stats:");
+
+        if self.upload_stats.total_size != 0 {
+            self.upload_stats.print("upload");
+        }
+
+        if self.download_stats.total_size != 0 {
+            self.download_stats.print("download");
+        }
+    }
+}
+
+pub fn bind_socket(
+    addr: SocketAddr,
+    send_buffer_size: usize,
+    recv_buffer_size: usize,
+) -> Result<std::net::UdpSocket> {
+    let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))
+        .context("create socket")?;
+
+    if addr.is_ipv6() {
+        socket.set_only_v6(false).context("set_only_v6")?;
+    }
+
+    socket
+        .bind(&socket2::SockAddr::from(addr))
+        .context("binding endpoint")?;
+    socket
+        .set_send_buffer_size(send_buffer_size)
+        .context("send buffer size")?;
+    socket
+        .set_recv_buffer_size(recv_buffer_size)
+        .context("recv buffer size")?;
+
+    let buf_size = socket.send_buffer_size().context("send buffer size")?;
+    if buf_size < send_buffer_size {
+        warn!(
+            "Unable to set desired send buffer size. Desired: {}, Actual: {}",
+            send_buffer_size, buf_size
+        );
+    }
+
+    let buf_size = socket.recv_buffer_size().context("recv buffer size")?;
+    if buf_size < recv_buffer_size {
+        warn!(
+            "Unable to set desired recv buffer size. Desired: {}, Actual: {}",
+            recv_buffer_size, buf_size
+        );
+    }
+
+    Ok(socket.into())
+}
+
+pub async fn drain_stream(stream: &mut RecvStream, read_unordered: bool) -> Result<usize> {
     let mut read = 0;
 
     if read_unordered {
@@ -93,7 +148,7 @@ pub async fn drain_stream(stream: &mut quinn::RecvStream, read_unordered: bool) 
     Ok(read)
 }
 
-pub async fn send_data_on_stream(stream: &mut quinn::SendStream, stream_size: u64) -> Result<()> {
+pub async fn send_data_on_stream(stream: &mut SendStream, stream_size: u64) -> Result<()> {
     const DATA: &[u8] = &[0xAB; 1024 * 1024];
     let bytes_data = Bytes::from_static(DATA);
 
@@ -119,78 +174,26 @@ pub async fn send_data_on_stream(stream: &mut quinn::SendStream, stream_size: u6
     Ok(())
 }
 
-pub fn rt() -> Runtime {
-    Builder::new_current_thread().enable_all().build().unwrap()
-}
 
-pub fn transport_config(opt: &Opt) -> quinn::TransportConfig {
-    // High stream windows are chosen because the amount of concurrent streams
-    // is configurable as a parameter.
-    let mut config = quinn::TransportConfig::default();
-    config.max_concurrent_uni_streams(opt.max_streams.try_into().unwrap());
-    config.initial_mtu(opt.initial_mtu);
+async fn handle_client_stream(
+    connection: Arc<Connection>,
+    upload_size: u64,
+    read_unordered: bool,
+) -> Result<(TransferResult, TransferResult)> {
+    let start = Instant::now();
 
-    // TODO: reenable when we upgrade quinn version
-    // let mut acks = quinn::AckFrequencyConfig::default();
-    // acks.ack_eliciting_threshold(10u32.into());
-    // config.ack_frequency_config(Some(acks));
+    let (mut send_stream, mut recv_stream) = connection
+        .open_bi()
+        .await
+        .context("failed to open stream")?;
 
-    config
-}
+    send_data_on_stream(&mut send_stream, upload_size).await?;
 
-#[derive(Parser, Debug, Clone, Copy)]
-#[clap(name = "bulk")]
-pub struct Opt {
-    /// The total number of clients which should be created
-    #[clap(long = "clients", short = 'c', default_value = "1")]
-    pub clients: usize,
-    /// The total number of streams which should be created
-    #[clap(long = "streams", short = 'n', default_value = "1")]
-    pub streams: usize,
-    /// The amount of concurrent streams which should be used
-    #[clap(long = "max_streams", short = 'm', default_value = "1")]
-    pub max_streams: usize,
-    /// Number of bytes to transmit from server to client
-    ///
-    /// This can use SI prefixes for sizes. E.g. 1M will transfer 1MiB, 10G
-    /// will transfer 10GiB.
-    #[clap(long, default_value = "1G", value_parser = parse_byte_size)]
-    pub download_size: u64,
-    /// Number of bytes to transmit from client to server
-    ///
-    /// This can use SI prefixes for sizes. E.g. 1M will transfer 1MiB, 10G
-    /// will transfer 10GiB.
-    #[clap(long, default_value = "0", value_parser = parse_byte_size)]
-    pub upload_size: u64,
-    /// Show connection stats the at the end of the benchmark
-    #[clap(long = "stats")]
-    pub stats: bool,
-    /// Whether to use the unordered read API
-    #[clap(long = "unordered")]
-    pub read_unordered: bool,
-    /// Starting guess for maximum UDP payload size
-    #[clap(long, default_value = "1200")]
-    pub initial_mtu: u16,
-}
+    let upload_result = TransferResult::new(start.elapsed(), upload_size);
 
-fn parse_byte_size(s: &str) -> Result<u64, ParseIntError> {
-    let s = s.trim();
+    let start = Instant::now();
+    let size = drain_stream(&mut recv_stream, read_unordered).await?;
+    let download_result = TransferResult::new(start.elapsed(), size as u64);
 
-    let multiplier = match s.chars().last() {
-        Some('T') => 1024 * 1024 * 1024 * 1024,
-        Some('G') => 1024 * 1024 * 1024,
-        Some('M') => 1024 * 1024,
-        Some('k') => 1024,
-        _ => 1,
-    };
-
-    let s = if multiplier != 1 {
-        &s[..s.len() - 1]
-    } else {
-        s
-    };
-
-    let base: u64 = u64::from_str(s)?;
-
-    Ok(base * multiplier)
+    Ok((upload_result, download_result))
 }
