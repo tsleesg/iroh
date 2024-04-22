@@ -10,7 +10,8 @@ members = [
   "iroh-sync",
   "iroh-test",
   "iroh-net/bench",
-  "iroh-cli"
+  "iroh-cli",
+  "iroh-willow",
 ]
 resolver = "2"
 
